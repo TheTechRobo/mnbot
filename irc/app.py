@@ -70,7 +70,7 @@ async def generate_status_message(job: str):
     ent = await QUEUE.get(job)
     if not ent:
         return f"No job with ID {repr(job)} could be found. Note: Items cannot currently be looked up by URL."
-    return f"Job {ent.id} ({repr(ent.item)}) has status {ent.status.upper()} and was queued at {ent.queued_at.isoformat(timespec='seconds')}."
+    return f"Job {ent.id} ({repr(ent.item)}) has status {ent.status.upper()} and was queued at {ent.queued_at.isoformat(timespec='seconds')}. Explanation: {ent.explanation}"
 
 @bot.command("!status")
 async def status(self: Bot, user: User, ran, *jobs):
@@ -105,6 +105,16 @@ async def whereis(self: Bot, user: User, ran, id: str):
         yield f"Job {job.id} is not currently claimed."
     else:
         yield f"Job {job.id} is currently claimed by pipeline {job.pipeline_type}."
+
+@bot.command({"!explain", "!e"})
+async def explain(self: Bot, user: User, ran, id: str, *reason):
+    job = await QUEUE.get(id)
+    if not job:
+        yield f"Job {id} does not exist."
+    else:
+        r = " ".join(reason)
+        nj = await QUEUE.change_explanation(job, r)
+        yield f"Reason for {job.id} set to {nj.explanation!r}."
 
 @bot.command("!!reclaim", required_modes="@")
 async def abandon(self: Bot, user: User, ran, id: str, *reason):
