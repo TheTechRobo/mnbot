@@ -1,0 +1,18 @@
+.active {
+	color: grey;
+}
+
+body {
+	padding-left: 10%;
+	padding-right: 10%;
+}
+
+header {
+	display: flex;
+	justify-content: space-between;
+}
+
+nav {
+	justify-content: flex-end;
+}
+

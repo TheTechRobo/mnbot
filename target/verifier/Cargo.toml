@@ -1,0 +1,13 @@
+[package]
+name = "verifier"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.92"
+common = { version = "0.1.0", path = "../../../bullseye/common", features = ["db"] }
+futures = { version = "0.3.31", features = ["executor"] }
+
+[profile.dev]
+opt-level = 1 # Otherwise unusable on debug mode (due to hashing)
+

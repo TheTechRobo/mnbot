@@ -1,0 +1,22 @@
+{% extends "skeleton.j2" %}
+
+{% block title %} Home {% endblock %}
+
+{% block content %}
+
+<section id="queues">
+	<h2>Queues</h2>
+	<p>See <a href="/queue">Pending</a> for queued items.</p>
+	{% for pipeline, queues in status.items() %}
+		<p>Pipeline {{ pipeline }}:</p>
+		<ul>
+			{% for queue, value in queues.items() %}
+				<li>
+					<b>{{ value }}</b> {{ queue }} items.</b>
+				</li>
+			{% endfor %}
+		</ul>
+	{% endfor %}
+</section>
+
+{% endblock %}

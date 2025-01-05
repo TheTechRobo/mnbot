@@ -1,0 +1,33 @@
+{% extends "skeleton.j2" %}
+
+{% block title %} Home {% endblock %}
+
+{% block content %}
+
+<section id="pending">
+	<h2>{{ len(pending) }} Pending Items</h2>
+	<table>
+		<tr>
+			<th>Identifier</th>
+			<th>URL</th>
+			<th>Explanation</th>
+			<th>Parent</th>
+			<th>Selected pipeline</th>
+			<th>Queued by</th>
+			<th>Queued at</th>
+		</tr>
+		{% for item in pending %}
+			<tr>
+				<td>{{ item.id }}</td>
+				<td>{{ item.item }}</td>
+				<td>{{ item.explanation }}</td>
+				<td>{{ item.parent_item }}</td>
+				<td>{{ item.run_on or None }}</td>
+				<td>{{ item.queued_by }}</td>
+				<td>{{ item.queued_at.replace(microsecond=0) }}</td>
+			</tr>
+		{% endfor %}
+	</table>
+</section>
+
+{% endblock %}

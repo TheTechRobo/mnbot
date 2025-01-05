@@ -1,0 +1,69 @@
+services:
+  # Brozzler now uses headless Chrome, so this is no longer necessary.
+  # Keeping it here just in case.
+  #x:
+  #  build: xvnc4
+  #  expose:
+  #    - "5902"
+  #  ports:
+  #    - "5902:5902"
+  #  restart: always
+  rethinkdb:
+    restart: always
+    image: rethinkdb:latest
+    volumes:
+      - ./rethinkdb-data:/data
+    ports:
+      - "4186:8080" # expose web UI for debugging
+    stop_signal: SIGINT
+  warcprox:
+    build:
+      context: warcprox
+    environment:
+      # Why use RethinkDB, you ask?
+      # It allows us to garbage-collect dedup and stats from another container.
+      rethinkdb_dedup_url: "rethinkdb://rethinkdb:28015/cb-warcprox/dedup"
+      rethinkdb_stats_url: "rethinkdb://rethinkdb:28015/cb-warcprox/stats"
+    restart: always
+    volumes:
+      - ./warcprox-data:/data
+    depends_on:
+      rethinkdb:
+        condition: service_started
+  warcupload:
+    restart: always
+    build:
+      context: warcupload
+    volumes:
+      - ./warcprox-data:/input
+    environment:
+      USERNAME: ${USERNAME}
+      TARGET_URL: ${TARGET_URL}
+    # No depends_on for warcprox as it can work without it
+  worker:
+    restart: always
+    build:
+      context: worker
+    environment:
+      TRACKER_URL: ${TRACKER_URL}
+      DEBUG: ${WORKER_DEBUG}
+    security_opt:
+      # Allows Chrome to do a bunch of weird syscalls for sandboxing.
+      # This is probably an attack vector! But I think there's enough
+      # protection that it's not exploitable.
+      # Namely, we trust Chrome, and it's sandboxing the untrusted parts away.
+      # Also, it's not running as root anyway, which limits the syscalls it can actually do.
+      # The alternative is to disable Chrome's sandboxing, which protects the host,
+      # but leaves the container vulnerable.
+      # Cf. https://stackoverflow.com/a/62383642/9654083 and https://stackoverflow.com/a/64460373/9654083
+      # (SYS_ADMIN seems like a bad idea.)
+      - seccomp=chrome.json
+    depends_on:
+      warcprox:
+        condition: service_started
+      rethinkdb:
+        condition: service_started
+    # No job should realistically take more than 15 minutes (or even close),
+    # so if we exceed that, something is probably stuck.
+    stop_grace_period: 15m
+

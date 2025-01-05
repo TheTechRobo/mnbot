@@ -1,0 +1,13 @@
+[package]
+name = "packer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.95"
+chrono = "0.4.39"
+common = { version = "0.1.0", path = "../../../bullseye/common", features = ["db"] }
+futures = { version = "0.3.31", features = ["executor"] }
+nix = "0.29.0"
+rand = "0.8.5"
+serde_json = "1.0.134"

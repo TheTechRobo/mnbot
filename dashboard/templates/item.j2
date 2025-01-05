@@ -1,0 +1,100 @@
+{% extends "skeleton.j2" %}
+
+{% block title %} Item {{ item.id }} {% endblock %}
+
+{% block content %}
+
+<h2>Item {{ item.id }}</h2>
+
+<section id="item">
+	<h3>Item data</h3>
+	<ul>
+		<li><b>Item URL: </b><a href="{{ item.item }}">{{ item.item }}</a></li>
+		<li><b>Item status: </b>
+			{{ item.status }}
+			{% if item.stash %}
+				{% if item.status == "stashed" %} (in
+				{% else %} (from
+				{% endif %} stash {{ item.stash }})
+			{% endif %}
+		</li>
+		<li><b>Queued by: </b>{{ item.queued_by }}</li>
+		{% if item.metadata['user_agent'] %}
+			<li><b>User agent: </b><code>{{ item.metadata['user_agent'] }}</code></li>
+		{% endif %}
+		{% if item.metadata['custom_js'] %}
+			<li>
+				<details style="display: block; margin:0">
+					<summary><b>Custom JavaScript: </b>Click to show</summary>
+					<pre>{{ item.metadata['custom_js'] }}</pre>
+				</details>
+			</li>
+		{% else %}
+			<li><b>Custom JavaScript: </b>None</li>
+		{% endif %}
+		<li><b>Pipeline type: </b>{{ item.pipeline_type }}</li>
+		<li><b>Priority: </b>{{ item.priority }} (effective {{ item.priority + item.tries }})</li>
+		<li><b>Queued at: </b>{{ item.queued_at.replace(microsecond=0) }}</li>
+		{% if item.claimed_at %}
+			<li><b>Last claimed at: </b>{{ item.claimed_at.replace(microsecond=0) }}</li>
+		{% endif %}
+		{% if item.finished_at %}
+			<li><b>Finished at: </b>{{ item.finished_at.replace(microsecond=0) }}</li>
+		{% endif %}
+		<li><b>Tries: </b>{{ item.tries }}</li>
+		{% if item.error_reasons %}
+			<li>
+				<b>Error reasons:</b>
+				<ul>
+					{% for reason in item.error_reasons %}
+						<li>
+							<details>
+								<summary><code>{{ reason.split('\n')[0].strip() }}</code> {% if '\n' in reason %}(click for full message) {% endif %}</summary>
+								<pre>{{ reason }}</pre>
+							</details>
+						</li>
+					{% endfor %}
+				</ul>
+			</li>
+		{% endif %}
+		{% if item.expires %}
+			<li><b>Expires: </b>{{ item.expires.replace(microsecond=0) }}</li>
+		{% endif %}
+		{% if item.explanation %}
+			<li><b>Explanation: </b>{{ item.explanation }}</li>
+		{% endif %}
+		{% if item.claimed_by %}
+			<li><b>Last claimed by pipeline: </b>{{ item.claimed_by }}</li>
+		{% elif item.run_on %}
+			<li><b>Must run on pipeline: </b>{{ item.run_on }}</li>
+		{% endif %}
+	</ul>
+</section>
+
+<section id="results">
+	<h3>Results</h3>
+	{% if results %}
+		<ul>
+			{% for try, try_results in results.items() %}
+				<b>Try {{ try }} (on pipeline {{ try_results[0].pipeline }})</b>
+				{% for result in try_results %}
+					<li>
+						<details>
+							<summary><code>{{ result.type }}</code> (click to show)</summary>
+							<code>{{ result.data }}</code>
+						</details>
+					</li>
+				{% endfor %}
+			{% endfor %}
+		</ul>
+	{% else %}
+		<p>No results exist for this item. It may not have finished yet. If the item is in done and there are no results, please contact an admin, as that's probably not right.</p>
+	{% endif %}
+</section>
+
+<section id="upload">
+	<h3>Uploads</h3>
+	<p>Item {{ item.id }} has not yet been uploaded to IA. Uploading may take up to a day. If it is still not uploaded after that, please contact an admin.</p>
+</section>
+
+{% endblock %}
