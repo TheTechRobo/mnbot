@@ -8,4 +8,4 @@ export ITEM_TITLE="Chromebot Item Test"
 export ITEM_DESC="Someone forgot to fill in the description."
 export ITEM_COLLECTION="test_collection"
 
-while true; do ./to-ia.py; done
+while true; do ./to-ia.py; sleep 120; done
