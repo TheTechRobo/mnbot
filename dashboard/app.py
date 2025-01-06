@@ -19,7 +19,7 @@ NAV = (
     ("/admin", "Admin")
 )
 
-app.before_first_request(QUEUE.check)
+app.before_serving(QUEUE.check)
 
 @app.context_processor
 def aaa():
