@@ -2,6 +2,12 @@
 # Set H2IBOT_* to the correct values
 
 services:
+  initialise:
+    network_mode: host
+    build:
+      context: initialise_db
+    restart: on-failure:3
+    init: true
   tracker:
     network_mode: host
     build:
@@ -11,6 +17,9 @@ services:
       - H2IBOT_POST_URL=http://a:a@192.168.2.228:8080/jsi
     restart: always
     init: true
+    depends_on:
+      initialise:
+        condition: service_completed_successfully
   bot:
     network_mode: host
     build:
@@ -20,9 +29,15 @@ services:
       - H2IBOT_POST_URL=http://a:a@192.168.2.228:8080/jsi
     restart: always
     init: true
+    depends_on:
+      initialise:
+        condition: service_completed_successfully
   dashboard:
     network_mode: host
     build:
       context: ../dashboard
     restart: always
     init: true
+    depends_on:
+      initialise:
+        condition: service_completed_successfully
