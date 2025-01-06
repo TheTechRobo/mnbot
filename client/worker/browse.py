@@ -11,6 +11,7 @@ if typing.TYPE_CHECKING:
     from tracker import Websocket
 
 import brozzler
+import requests
 
 PROXY_URL = "warcprox:8000"
 
@@ -140,6 +141,26 @@ class Brozzler:
             logger.debug(f"received response (too long for logs)")
         return message
 
+    def _proxy_url(self, url: str, headers: dict):
+        proxies = {
+            "http": f"http://{PROXY_URL}",
+            "https": f"https://{PROXY_URL}"
+        }
+        logger.debug(f"fetching {url}")
+        return requests.get(
+            url,
+            proxies = proxies,
+            headers = headers,
+            verify = False
+        )
+
+    def _best_effort_proxy_url(self, url: str, headers: dict):
+        try:
+            return self._proxy_url(url, headers)
+        except Exception:
+            logger.warning(f"failed to proxy URL; stifling issue", exc_info = True)
+            return None
+
     def _brozzle(self, browser, full_job: dict, url: str, warc_prefix: str, dedup_bucket: str, stats_bucket: str, user_agent: typing.Optional[str], custom_js: typing.Optional[str], cookie_jar = None) -> Result:
         assert not browser.is_running()
         logger.debug("writing item info")
@@ -152,6 +173,14 @@ class Brozzler:
             }).encode(),
             warc_prefix
         )
+        extra_headers = {
+            "Warcprox-Meta": json.dumps({
+                "warc-prefix": warc_prefix,
+                #"dedup-buckets": {"successful_jobs": "ro", dedup_bucket: "rw"}
+                "dedup-buckets": {dedup_bucket: "rw"},
+                "stats": {"buckets": [stats_bucket]}
+            }),
+        }
         logger.debug("starting browser")
         logger.critical(os.environ['BROZZLER_EXTRA_CHROME_ARGS'])
         browser.start(
@@ -163,6 +192,18 @@ class Brozzler:
         def on_screenshot(data):
             self._on_screenshot(data, canon_url, warc_prefix)
 
+        # Shamelessly stolen from brozzler's Worker._browse_page.
+        # Apparently service workers don't get added to the right WARC:
+        # https://github.com/internetarchive/brozzler/issues/140
+        # This fetches them with requests to work around it.
+        already_fetched = set()
+        def _on_service_worker_version_updated(chrome_msg):
+            url = chrome_msg.get("params", {}).get("versions", [{}])[0].get("scriptURL")
+            if url and url not in already_fetched:
+                logger.info(f"fetching service worker script {url}")
+                self._best_effort_proxy_url(url, extra_headers)
+                already_fetched.add(url)
+
         logger.debug("browsing page")
         final_url, outlinks = browser.browse_page(
             page_url = url,
@@ -172,15 +213,9 @@ class Brozzler:
             skip_extract_outlinks = True,
             skip_visit_hashtags = True,
             on_screenshot = on_screenshot,
+            on_service_worker_version_updated = _on_service_worker_version_updated,
             stealth = True,
-            extra_headers = {
-                "Warcprox-Meta": json.dumps({
-                    "warc-prefix": warc_prefix,
-                    #"dedup-buckets": {"successful_jobs": "ro", dedup_bucket: "rw"}
-                    "dedup-buckets": {dedup_bucket: "rw"},
-                    "stats": {"buckets": [stats_bucket]}
-                }),
-            }
+            extra_headers = extra_headers
         )
         assert len(outlinks) == 0, "Brozzler didn't listen to us :["
         status_code: int = browser.websock_thread.page_status
