@@ -28,6 +28,7 @@ services:
       - "6161:7000"
     environment:
       RETHINKDB_HOST: "rethinkdb"
+      HOST: "0.0.0.0"
     depends_on:
       rethinkdb:
         condition: service_started
