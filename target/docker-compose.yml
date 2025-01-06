@@ -1,0 +1,71 @@
+services:
+  rethinkdb:
+    image: rethinkdb:latest
+    restart: always
+    volumes:
+      - ./upload-space/rdb:/data
+    stop_signal: SIGINT
+    command: rethinkdb --bind 0.0.0.0
+    ports:
+      - "4184:8080"
+    init: true
+  init_db:
+    build:
+      context: initialise_db
+    restart: on-failure:3
+    depends_on:
+      - rethinkdb
+    environment:
+      RETHINKDB_HOST: "rethinkdb"
+    init: true
+  frontend:
+    image: give-me-some.very-good-quality-co.de/public/bullseye-server
+    restart: always
+    stop_signal: SIGINT
+    volumes:
+      - ./upload-space/server:/data
+    ports:
+      - "6161:7000"
+    environment:
+      RETHINKDB_HOST: "rethinkdb"
+    depends_on:
+      rethinkdb:
+        condition: service_started
+      init_db:
+        condition: service_completed_successfully
+    init: true
+  verifier:
+    build:
+      context: verifier
+    volumes:
+      - ./upload-space/server:/data
+    environment:
+      RETHINKDB_HOST: "rethinkdb"
+    depends_on:
+      rethinkdb:
+        condition: service_started
+      init_db:
+        condition: service_completed_successfully
+    init: true
+  packer:
+    build:
+      context: packer
+    volumes:
+      - ./upload-space/server:/data
+      - ./upload-space/toia:/out
+    command: /out
+    environment:
+      RETHINKDB_HOST: "rethinkdb"
+    depends_on:
+      rethinkdb:
+        condition: service_started
+      init_db:
+        condition: service_completed_successfully
+    init: true
+  uploader:
+    build:
+      context: uploader
+    volumes:
+      - ./upload-space/toia:/input
+    init: true
+

@@ -9,17 +9,19 @@ use rand::{seq::SliceRandom, thread_rng};
 fn make_datestamp() -> String {
     let current_date = Utc::now();
     format!(
-        "{}{}{}",
+        "{}{:02}{:02}",
         current_date.year(),
         current_date.month(),
         current_date.day()
     )
 }
 
+const CHROMEBOT_PREFIX: &str = "chromebot-brozzler-";
+
 fn make_dirname(base_dir: &String, current_date: String) -> PathBuf {
     let alphabet: Vec<char> = ('a'..='z').chain('0'..='9').collect();
     let dirname = format!(
-        "chromebot-brozzler-{current_date}-{}",
+        "{CHROMEBOT_PREFIX}{current_date}-{}",
         alphabet.choose_multiple(&mut thread_rng(), 8).collect::<String>()
     );
     [base_dir, &dirname].iter().collect()

@@ -36,7 +36,7 @@ fn verify_file(file: &File, fp: &PathBuf, file_metadata: &db::File) -> Result<St
     Ok(Status::Packing)
 }
 
-fn handle_item(conn: DatabaseHandle, mut item: UploadRow, is_reclaim: bool) -> Result<()> {
+fn handle_item(conn: &DatabaseHandle, mut item: UploadRow, is_reclaim: bool) -> Result<()> {
     let fp: PathBuf = [item.dir(), item.id()].iter().collect();
     let file = File::open(&fp)?;
     if let Err(e) = acquire_lock(file.as_raw_fd(), true) {
@@ -61,13 +61,12 @@ fn handle_item(conn: DatabaseHandle, mut item: UploadRow, is_reclaim: bool) -> R
     }
 }
 
-fn do_one() -> Result<()> {
-    let conn = DatabaseHandle::new().unwrap();
-    let item = block_on(UploadRow::check_out(&conn, "chromebot".to_string(), "warcprox-warc".to_string(), Status::Verifying, false)).unwrap();
+fn do_one(conn: &DatabaseHandle) -> Result<()> {
+    let item = block_on(UploadRow::check_out(conn, "chromebot".to_string(), "warcprox-warc".to_string(), Status::Verifying, false))?;
     if let Some(item) = item {
         handle_item(conn, item, false)
     } else {
-        let item = block_on(UploadRow::check_out(&conn, "chromebot".to_string(), "warcprox-warc".to_string(), Status::Verifying, true)).unwrap();
+        let item = block_on(UploadRow::check_out(conn, "chromebot".to_string(), "warcprox-warc".to_string(), Status::Verifying, true))?;
         if let Some(item) = item {
             eprintln!("stealing item {}", item.id());
             handle_item(conn, item, true)
@@ -80,8 +79,9 @@ fn do_one() -> Result<()> {
 }
 
 fn main() -> ! {
+    let conn = DatabaseHandle::new().unwrap();
     loop {
-        let res = do_one();
+        let res = do_one(&conn);
         if res.is_err() {
             eprintln!("unhandled error: {res:?}, waiting 5 seconds");
             sleep(Duration::from_secs(5));

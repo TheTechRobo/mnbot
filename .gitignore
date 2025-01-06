@@ -16,3 +16,4 @@ run.sh
 __pycache__/
 *.py[co]
 client/warcupload/testdata
+upload-space/
