@@ -1,6 +1,6 @@
 import asyncio, logging, json
 
-logger = logging.getLogger("chromebot")
+logger = logging.getLogger("mnbot")
 del logging
 
 import websockets

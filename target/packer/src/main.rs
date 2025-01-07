@@ -16,12 +16,12 @@ fn make_datestamp() -> String {
     )
 }
 
-const CHROMEBOT_PREFIX: &str = "chromebot-brozzler-";
+const MNBOT_PREFIX: &str = "mnbot-brozzler-";
 
 fn make_dirname(base_dir: &String, current_date: String) -> PathBuf {
     let alphabet: Vec<char> = ('a'..='z').chain('0'..='9').collect();
     let dirname = format!(
-        "{CHROMEBOT_PREFIX}{current_date}-{}",
+        "{MNBOT_PREFIX}{current_date}-{}",
         alphabet.choose_multiple(&mut thread_rng(), 8).collect::<String>()
     );
     [base_dir, &dirname].iter().collect()
@@ -39,8 +39,8 @@ fn handle_item(conn: &DatabaseHandle, mut item: UploadRow, is_reclaim: bool, dir
         // Well this is REALLY awkward
         bail!("failed lock is probably concerning")
     }
-    let warc_path = dirname.join("chromebot.warc.gz");
-    let json_path = dirname.join("chromebot.json");
+    let warc_path = dirname.join("mnbot.warc.gz");
+    let json_path = dirname.join("mnbot.json");
 
     let mut warc = File::options()
         .write(true)
@@ -91,7 +91,7 @@ fn handle_item(conn: &DatabaseHandle, mut item: UploadRow, is_reclaim: bool, dir
 }
 
 fn do_a_file(conn: &DatabaseHandle, dirname: PathBuf) -> Result<()> {
-    let project = "chromebot".to_string();
+    let project = "mnbot".to_string();
     let pipeline = "warcprox-warc".to_string();
     let item = block_on(UploadRow::check_out(conn, project.clone(), pipeline.clone(), common::db::Status::Packing, false))?;
     if let Some(item) = item {

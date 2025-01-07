@@ -1,14 +1,14 @@
 FROM python:3.9-bookworm
 
 # Add user for Chromium to run as. (It's unhappy as root.)
-RUN groupadd --gid 1000 chromebot \
-		&& useradd --uid 1000 --gid 1000 -m chromebot
+RUN groupadd --gid 1000 mnbot \
+		&& useradd --uid 1000 --gid 1000 -m mnbot
 
 RUN apt-get update \
 		&& DEBIAN_FRONTEND=noninteractive apt-get -y install \
 			tini chromium libjpeg-dev python3-dev python3-pip xfonts-base sudo \
-		&& echo chromebot ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/chromebot \
-		&& chmod 0440 /etc/sudoers.d/chromebot \
+		&& echo mnbot ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/mnbot \
+		&& chmod 0440 /etc/sudoers.d/mnbot \
 		&& apt-get clean
 
 # eb922f515545783158915a5edfb95f4548ad65c1 is known to work.
@@ -21,7 +21,7 @@ COPY browse.py /app
 COPY meta.py /app
 COPY tracker.py /app
 
-USER chromebot
+USER mnbot
 #ENV DISPLAY x:2.0
 
 # This caused me about three hours of hair-tearing.

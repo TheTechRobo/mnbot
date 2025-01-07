@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 r.set_loop_type("asyncio")
 bot = SendOnlyBot(os.environ['H2IBOT_POST_URL'])
 
-QUEUE = Queue("chromebot")
+QUEUE = Queue("mnbot")
 asyncio.run(QUEUE.check())
 
 async def notify_user(item: Entry, message: str):
@@ -110,7 +110,7 @@ async def handle_connection(websocket: ServerConnection):
 async def authenticate(username, key):
     conn = await r.connect()
     try:
-        expected_key = await r.db("chromebot").table("server_secrets").get(username).run(conn)
+        expected_key = await r.db("mnbot").table("server_secrets").get(username).run(conn)
         return expected_key and hmac.compare_digest(key, expected_key['value'])
     finally:
         try:
@@ -123,7 +123,7 @@ async def main():
         handle_connection,
         "0.0.0.0", 8897,
         process_request=basic_auth(
-            realm="Chromebot item server",
+            realm="mnbot item server",
             check_credentials=authenticate
         ),
         max_size=2**25

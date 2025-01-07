@@ -12,7 +12,7 @@ H2IBOT_POST_URL = os.environ['H2IBOT_POST_URL']
 
 bot = Bot(H2IBOT_GET_URL, H2IBOT_POST_URL, max_coros = 1)
 
-QUEUE = Queue("chromebot")
+QUEUE = Queue("mnbot")
 asyncio.run(QUEUE.check())
 print("setup complete")
 
@@ -45,8 +45,8 @@ async def brozzle(self: Bot, user: User, ran, args):
                     yield f"Got status {resp.status} (expected 200) when fetching custom JS."
                     return
                 custom_js = await resp.text()
-                if not custom_js.startswith("//! chromebot v1\n"):
-                    yield "Custom JS must start with a valid Chromebot header."
+                if not custom_js.startswith("//! mnbot v1\n"):
+                    yield "Custom JS must start with a valid mnbot header."
                     return
         except Exception:
             yield "An error occured when retrieving custom JS."
@@ -146,8 +146,8 @@ async def abandon(self: Bot, user: User, ran, id: str, *reason):
 async def dripfeed(self: Bot, user: User, ran: str, stash: str, raw_concurrency: str):
     """
     Usage: !!dripfeed <STASH> <CONCURRENCY>
-    Makes a stash dripfeed into todo. Chromebot will periodically move items from the stash into the queue, in regular dequeuing order. No more than CONCURRENCY items from the stash will be in the queue at once.
-    The exact rate at which Chromebot dripfeeds items is undefined, but the concurrency limit will always be respected.
+    Makes a stash dripfeed into todo. mnbot will periodically move items from the stash into the queue, in regular dequeuing order. No more than CONCURRENCY items from the stash will be in the queue at once.
+    The exact rate at which mnbot dripfeeds items is undefined, but the concurrency limit will always be respected.
 
     Set CONCURRENCY to 0 to disable dripfeeding. Items that have already been dripfed will not be affected.
     """

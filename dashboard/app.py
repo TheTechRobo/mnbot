@@ -9,7 +9,7 @@ class EscapingQuart(Quart):
 
 from rue import Queue
 
-QUEUE = Queue("chromebot")
+QUEUE = Queue("mnbot")
 
 app = EscapingQuart(__name__)
 

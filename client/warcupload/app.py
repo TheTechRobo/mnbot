@@ -18,7 +18,7 @@ for ent in os.scandir(DATA_DIR):
     if not ent.is_file(follow_symlinks=False): continue
     if not ent.name.endswith(".warc.gz"): continue
     try:
-        chromebot, pipeline, item, ts, seq, rand = ent.name.split("-")
+        mnbot, pipeline, item, ts, seq, rand = ent.name.split("-")
         rand, extension = rand.split(".", 1)
         item = uuid.UUID(item.replace("_", "-"))
     except ValueError:
@@ -28,7 +28,7 @@ for ent in os.scandir(DATA_DIR):
     subprocess.run(
         [
             bc,
-            "--project", "chromebot",
+            "--project", "mnbot",
             "--pipeline", "warcprox-warc",
             "--uploader", UPLOADER,
             "--base-url", UPLOAD_SERVER,

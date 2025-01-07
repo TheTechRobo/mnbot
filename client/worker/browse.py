@@ -1,7 +1,7 @@
 import asyncio, dataclasses, time, typing, urllib.request, json, shutil, os
 
 import logging
-logger = logging.getLogger("chromebot")
+logger = logging.getLogger("mnbot")
 del logging
 
 from meta import VERSION
@@ -42,10 +42,10 @@ def _stats_db():
 def _setup_db():
     conn = r.connect(host = "rethinkdb")
     indexes = _dedup_db().index_list().run(conn)
-    #if "chromebot-bucket" not in indexes:
-    #    _dedup_db().index_create("chromebot-bucket", lambda row : row['key'].split("|", 1)).run(conn)
-    if "chromebot-date" not in indexes:
-        _dedup_db().index_create("chromebot-date", r.iso8601(r.row['date'])).run(conn)
+    #if "mnbot-bucket" not in indexes:
+    #    _dedup_db().index_create("mnbot-bucket", lambda row : row['key'].split("|", 1)).run(conn)
+    if "mnbot-date" not in indexes:
+        _dedup_db().index_create("mnbot-date", r.iso8601(r.row['date'])).run(conn)
     conn.close()
 _setup_db()
 r.set_loop_type("asyncio")
@@ -165,7 +165,7 @@ class Brozzler:
         assert not browser.is_running()
         logger.debug("writing item info")
         self._write_warcprox_record(
-            "metadata:chromebot-job-metadata",
+            "metadata:mnbot-job-metadata",
             "application/json",
             json.dumps({
                 "job": full_job,
@@ -276,7 +276,7 @@ class Brozzler:
         )
         logger.debug("writing job result data")
         self._write_warcprox_record(
-            "metadata:chromebot-job-result",
+            "metadata:mnbot-job-result",
             "application/json",
             json.dumps({
                 "result": r.dict()
@@ -333,7 +333,7 @@ async def warcprox_cleanup():
             _dedup_db()
             # Deletes records more than 7 days old, to prevent the database from blowing up
             # and to make sure that corrupt records don't forever cause a URL to be lost
-            .between(r.minval, r.now() - 7*24*3600, index = "chromebot-date")
+            .between(r.minval, r.now() - 7*24*3600, index = "mnbot-date")
             .delete(durability = "soft")
             .run(conn)
         )

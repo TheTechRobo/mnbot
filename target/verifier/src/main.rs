@@ -62,11 +62,11 @@ fn handle_item(conn: &DatabaseHandle, mut item: UploadRow, is_reclaim: bool) -> 
 }
 
 fn do_one(conn: &DatabaseHandle) -> Result<()> {
-    let item = block_on(UploadRow::check_out(conn, "chromebot".to_string(), "warcprox-warc".to_string(), Status::Verifying, false))?;
+    let item = block_on(UploadRow::check_out(conn, "mnbot".to_string(), "warcprox-warc".to_string(), Status::Verifying, false))?;
     if let Some(item) = item {
         handle_item(conn, item, false)
     } else {
-        let item = block_on(UploadRow::check_out(conn, "chromebot".to_string(), "warcprox-warc".to_string(), Status::Verifying, true))?;
+        let item = block_on(UploadRow::check_out(conn, "mnbot".to_string(), "warcprox-warc".to_string(), Status::Verifying, true))?;
         if let Some(item) = item {
             eprintln!("stealing item {}", item.id());
             handle_item(conn, item, true)

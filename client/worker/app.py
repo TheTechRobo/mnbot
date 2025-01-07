@@ -3,7 +3,7 @@
 import asyncio, logging, random, logging, os, io, signal
 
 logging.basicConfig(format = "%(asctime)s %(levelname)s <:%(thread)s> : %(message)s", level = logging.INFO)
-logger = logging.getLogger("chromebot")
+logger = logging.getLogger("mnbot")
 
 if os.environ.get("DEBUG") == "1":
     logger.setLevel(logging.DEBUG)
@@ -79,7 +79,7 @@ async def main():
                 logger.info(f"Starting task {id}")
                 url = item['item']
                 assert "_" not in id
-                prefix = "chromebot-brozzler-" + id.replace("-", "_")
+                prefix = "mnbot-brozzler-" + id.replace("-", "_")
                 task = asyncio.create_task(brozzler.run_job(
                     ws,
                     item,

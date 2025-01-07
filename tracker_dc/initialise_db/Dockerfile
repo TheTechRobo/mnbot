@@ -7,4 +7,4 @@ RUN pip install --break-system-packages /rue
 RUN apk del git
 
 ENTRYPOINT ["python3", "/rue/util/create.py"]
-CMD ["chromebot", "3"]
+CMD ["mnbot", "3"]

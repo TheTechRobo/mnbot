@@ -4,7 +4,7 @@
 export ROOT="/input"
 
 # XXX: CHANGE THESE VALUES
-export ITEM_TITLE="Chromebot Item Test"
+export ITEM_TITLE="mnbot Item Test"
 export ITEM_DESC="Someone forgot to fill in the description."
 export ITEM_COLLECTION="test_collection"
 
