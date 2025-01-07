@@ -1,4 +1,3 @@
-import json
 import os
 import asyncio
 
@@ -52,8 +51,8 @@ async def brozzle(self: Bot, user: User, ran, args):
         except Exception:
             yield "An error occured when retrieving custom JS."
             return
-    result = validators.url(args.url, public=True)
-    if isinstance(result, validators.ValidationFailure):
+    result = validators.url(args.url, strict_query = False, private = False)
+    if result is not True:
         yield "Failed to validate your URL. Cowardly bailing out."
         return
     ent = await QUEUE.new(
