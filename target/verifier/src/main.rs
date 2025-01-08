@@ -10,7 +10,7 @@ fn verify_file(file: &File, fp: &PathBuf, file_metadata: &db::File) -> Result<St
         remove_file(fp)?;
         return Ok(Status::Error(UploadError::Checksum));
     }
-    let mut zstdcat = Command::new("zstdcat")
+    let mut zstdcat = Command::new("zcat")
         .arg(fp)
         .stdout(Stdio::piped())
         .spawn()?;
