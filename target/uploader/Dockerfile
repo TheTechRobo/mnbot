@@ -1,8 +1,9 @@
 FROM python:3.9-alpine
 
-RUN apk add --no-cache wget bash curl py3-requests
+RUN apk add --no-cache wget bash curl
 
 WORKDIR /usr/local/bin
+RUN pip install --break-system-packages requests
 RUN wget https://gitea.arpa.li/JustAnotherArchivist/little-things/raw/branch/master/curl-ia
 RUN wget https://gitea.arpa.li/JustAnotherArchivist/little-things/raw/branch/master/ia-upload-stream
 RUN wget https://gitea.arpa.li/JustAnotherArchivist/little-things/raw/branch/master/ia-wait-item-tasks

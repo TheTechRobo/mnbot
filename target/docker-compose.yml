@@ -68,5 +68,8 @@ services:
       context: uploader
     volumes:
       - ./upload-space/toia:/input
+      - $HOME/.config/internetarchive/ia.ini:/ia.ini
+    environment:
+      - IA_CONFIG_FILE=/ia.ini
     init: true
 
