@@ -1,6 +1,6 @@
 FROM python:3.9-alpine
 
-RUN apk add --no-cache wget bash
+RUN apk add --no-cache wget bash curl py3-requests
 
 WORKDIR /usr/local/bin
 RUN wget https://gitea.arpa.li/JustAnotherArchivist/little-things/raw/branch/master/curl-ia
