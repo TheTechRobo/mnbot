@@ -19,9 +19,7 @@
 			{% endif %}
 		</li>
 		<li><b>Queued by: </b>{{ item.queued_by }}</li>
-		{% if item.metadata['user_agent'] %}
-			<li><b>User agent: </b><code>{{ item.metadata['user_agent'] }}</code></li>
-		{% endif %}
+		<li><b>User agent: </b>Chrome on Windows {% if not item.metadata['stealth_ua'] %} (with link to mnbot) {% endif %}</li>
 		{% if item.metadata['custom_js'] %}
 			<li>
 				<details style="display: block; margin:0">
@@ -94,7 +92,8 @@
 
 <section id="upload">
 	<h3>Uploads</h3>
-	<p>Item {{ item.id }} has not yet been uploaded to IA. Uploading may take up to a day. If it is still not uploaded after that, please contact an admin.</p>
+	<!-- <p>Item {{ item.id }} has not yet been uploaded to IA. Uploading may take up to a day. If it is still not uploaded after that, please contact an admin.</p> -->
+	<p>Upload indexing is currently not implemented.</p>
 </section>
 
 {% endblock %}

@@ -1,4 +1,5 @@
 import asyncio, logging, json
+import typing
 
 logger = logging.getLogger("mnbot")
 del logging
@@ -64,11 +65,13 @@ class Websocket:
                 await asyncio.sleep(sleep)
                 tries += 1
 
-    async def claim_item(self) -> dict:
+    async def claim_item(self) -> typing.Optional[tuple[dict, str]]:
         status, resp = await self._send("Item:claim", {"pipeline_type": "brozzler"})
         if status != 200:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
-        return resp['item']
+        if resp['item']:
+            return resp['item'], resp['info_url']
+        return None
 
     async def fail_item(self, id: str, reason: str):
         status, resp = await self._send("Item:fail", {"id": id, "message": reason})

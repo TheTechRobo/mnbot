@@ -18,7 +18,7 @@ print("setup complete")
 
 AIOHTTP_SESSION = None
 
-@bot.add_argument("--user-agent")
+@bot.add_argument("--stealth-ua", action = "store_true")
 @bot.add_argument("--explanation")
 @bot.add_argument("--custom-js")
 @bot.add_argument("url")
@@ -29,7 +29,7 @@ async def brozzle(self: Bot, user: User, ran, args):
     Brozzle a URL.
     --custom-js: run custom javascript when crawling; ops only
     --explanation: explanation/notes for the job; can be changed later
-    --user-agent: user agent to use (verbatim)
+    --stealth-ua: do not add mnbot info URL and version to user agent
     """
     global AIOHTTP_SESSION
     custom_js = None
@@ -60,7 +60,7 @@ async def brozzle(self: Bot, user: User, ran, args):
         "brozzler",
         user.nick,
         explanation = args.explanation,
-        metadata = {"user_agent": args.user_agent, "custom_js": custom_js},
+        metadata = {"stealth_ua": args.stealth_ua, "custom_js": custom_js},
     )
     yield f"Queued {args.url} for Brozzler-based archival. You will be notified when it finishes. Use !status {ent.id} for details."
 brozzle.help = brozzle.parser.format_usage().strip() + brozzle.help

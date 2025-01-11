@@ -73,8 +73,9 @@ async def main():
                 logger.debug("not spinning up new item as we are pending a stop")
                 continue
             logger.debug(f"spinning up worker")
-            item = await ws.claim_item()
-            if item:
+            resp = await ws.claim_item()
+            if resp:
+                item, info_url = resp
                 id = item['id']
                 logger.info(f"Starting task {id}")
                 url = item['item']
@@ -85,8 +86,9 @@ async def main():
                     item,
                     url,
                     prefix,
-                    item['metadata']['user_agent'],
-                    item['metadata']['custom_js']
+                    item['metadata']['stealth_ua'],
+                    item['metadata']['custom_js'],
+                    info_url
                 ))
                 task.set_name(id)
             else:

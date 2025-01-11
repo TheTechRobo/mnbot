@@ -53,6 +53,19 @@ r.set_loop_type("asyncio")
 ######### THE ACTUALLY IMPORTANT STUFF #########
 
 @dataclasses.dataclass
+class Job:
+    full_job: dict
+    url: str
+    warc_prefix: str
+    dedup_bucket: str
+    stats_bucket: str
+    stealth_ua: bool
+    custom_js: typing.Optional[str]
+    cookie_jar: typing.Optional[bytes]
+
+    mnbot_info_url: str
+
+@dataclasses.dataclass
 class Result:
     final_url: str
     outlinks: list
@@ -161,36 +174,52 @@ class Brozzler:
             logger.warning(f"failed to proxy URL; stifling issue", exc_info = True)
             return None
 
-    def _brozzle(self, browser, full_job: dict, url: str, warc_prefix: str, dedup_bucket: str, stats_bucket: str, user_agent: typing.Optional[str], custom_js: typing.Optional[str], cookie_jar = None) -> Result:
+    def _brozzle(self, browser: brozzler.Browser, job: Job) -> Result:
         assert not browser.is_running()
+        extra_headers = {
+            "Warcprox-Meta": json.dumps({
+                "warc-prefix": job.warc_prefix,
+                #"dedup-buckets": {"successful_jobs": "ro", dedup_bucket: "rw"}
+                "dedup-buckets": {job.dedup_bucket: "rw"},
+                "stats": {"buckets": [job.stats_bucket]}
+            }),
+        }
+        logger.debug("starting browser")
+        browser.start(
+            proxy = "http://" + PROXY_URL,
+            cookie_db = job.cookie_jar
+        )
+
+        logger.debug("getting user agent")
+        ua = self._run_cdp_command(
+            browser,
+            "Runtime.evaluate",
+            {"expression": "navigator.userAgent", "returnByValue": True}
+        )['result']['result']['value']
+        logger.debug(f"got user agent {ua}")
+        # pretend we're not headless
+        ua = ua.replace("HeadlessChrome", "Chrome")
+        # pretend to be Windows, as brozzler's stealth JS does (otherwise it's inconsistent)
+        ua = ua.replace("(X11; Linux x86_64)", "(Windows NT 10.0; Win64; x64)")
+        if not job.stealth_ua:
+            # add mnbot link
+            ua += f" (mnbot {VERSION}; +{job.mnbot_info_url})"
+        logger.debug(f"using updated user agent {ua}")
+
         logger.debug("writing item info")
         self._write_warcprox_record(
             "metadata:mnbot-job-metadata",
             "application/json",
             json.dumps({
-                "job": full_job,
+                "job": job.full_job,
                 "version": VERSION
             }).encode(),
-            warc_prefix
+            job.warc_prefix
         )
-        extra_headers = {
-            "Warcprox-Meta": json.dumps({
-                "warc-prefix": warc_prefix,
-                #"dedup-buckets": {"successful_jobs": "ro", dedup_bucket: "rw"}
-                "dedup-buckets": {dedup_bucket: "rw"},
-                "stats": {"buckets": [stats_bucket]}
-            }),
-        }
-        logger.debug("starting browser")
-        logger.critical(os.environ['BROZZLER_EXTRA_CHROME_ARGS'])
-        browser.start(
-            proxy = "http://" + PROXY_URL,
-            cookie_db = cookie_jar
-        )
-        canon_url = str(brozzler.urlcanon.semantic(url))
+        canon_url = str(brozzler.urlcanon.semantic(job.url))
 
         def on_screenshot(data):
-            self._on_screenshot(data, canon_url, warc_prefix)
+            self._on_screenshot(data, canon_url, job.warc_prefix)
 
         # Shamelessly stolen from brozzler's Worker._browse_page.
         # Apparently service workers don't get added to the right WARC:
@@ -206,8 +235,8 @@ class Brozzler:
 
         logger.debug("browsing page")
         final_url, outlinks = browser.browse_page(
-            page_url = url,
-            user_agent = user_agent,
+            page_url = job.url,
+            user_agent = ua,
             skip_youtube_dl = True,
             # We do these two things manually so they happen after custom_js
             skip_extract_outlinks = True,
@@ -223,13 +252,13 @@ class Brozzler:
         # This is different than brozzler's built-in behaviour_dir thingy because
         # we actually save the output.
         custom_js_result = None
-        if custom_js:
+        if job.custom_js:
             logger.debug("running custom behaviour")
             message = self._run_cdp_command(
                 browser = browser,
                 method = "Runtime.evaluate",
                 params = {
-                    "expression": custom_js,
+                    "expression": job.custom_js,
                     # Allow let redeclaration and await
                     # Let redeclaration isn't really necessary, but top-level await is nice.
                     "replMode": True,
@@ -266,7 +295,7 @@ class Brozzler:
         outer_html = self._run_cdp_command(browser, "DOM.getOuterHTML", {"nodeId": root_node_id})['result']['outerHTML']
         # And write it to the WARC.
         logger.debug("writing outer HTML to WARC")
-        self._write_warcprox_record("rendered-dom:" + canon_url, "text/html", outer_html.encode(), warc_prefix)
+        self._write_warcprox_record("rendered-dom:" + canon_url, "text/html", outer_html.encode(), job.warc_prefix)
 
         r = Result(
             final_url = final_url,
@@ -281,35 +310,40 @@ class Brozzler:
             json.dumps({
                 "result": r.dict()
             }).encode(),
-            warc_prefix
+            job.warc_prefix
         )
 
         return r
 
-    def _run_job_target(self, full_job: dict, url: str, warc_prefix: str, dedup_bucket: str, stats_bucket: str, user_agent: typing.Optional[str], custom_js: typing.Optional[str], cookie_jar = None) -> Result:
-        logger.debug(f"spun up thread for job {full_job['id']}")
+    def _run_job_target(self, job: Job) -> Result:
+        logger.debug(f"spun up thread for job {job.full_job['id']}")
         browser = self.pool.acquire()
         try:
-            return self._brozzle(browser, full_job, url, warc_prefix, dedup_bucket, stats_bucket, user_agent, custom_js, cookie_jar)
+            return self._brozzle(browser, job)
         finally:
             browser.stop()
             self.pool.release(browser)
 
-    async def run_job(self, ws: "Websocket", full_job: dict, url: str, warc_prefix: str, user_agent: typing.Optional[str], custom_js: typing.Optional[str]):
+    async def run_job(self, ws: "Websocket", full_job: dict, url: str, warc_prefix: str, stealth_ua: bool, custom_js: typing.Optional[str], info_url: str):
         tries = full_job['tries']
         id = full_job['id']
         #dedup_bucket = f"dedup-{id}-{tries}"
         dedup_bucket = ""
         stats_bucket = f"stats-{id}-{tries}"
-        result = await asyncio.to_thread(
-            self._run_job_target,
+        job = Job(
             full_job = full_job,
             url = url,
             warc_prefix = warc_prefix,
             dedup_bucket = dedup_bucket,
             stats_bucket = stats_bucket,
-            user_agent = user_agent,
+            stealth_ua = stealth_ua,
             custom_js = custom_js,
+            cookie_jar = None,
+            mnbot_info_url = info_url
+        )
+        result = await asyncio.to_thread(
+            self._run_job_target,
+            job = job
         )
         await ws.store_result(id, "status_code", tries, result.status_code)
         await ws.store_result(id, "outlinks", tries, result.outlinks)

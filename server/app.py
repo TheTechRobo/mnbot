@@ -13,6 +13,8 @@ from bot2h import SendOnlyBot
 
 logging.basicConfig(level=logging.INFO)
 
+INFO_URL = os.environ['INFO_URL']
+
 r.set_loop_type("asyncio")
 bot = SendOnlyBot(os.environ['H2IBOT_POST_URL'])
 
@@ -44,7 +46,8 @@ async def get(ctx: HandlerContext, *, pipeline_type) -> Response:
     item = await QUEUE.claim(ctx.username, pipeline_type)
     if item:
         payload = {
-            "item": item.as_json_friendly_dict()
+            "item": item.as_json_friendly_dict(),
+            "info_url": INFO_URL
         }
     else:
         payload = {
