@@ -14,6 +14,10 @@ from bot2h import SendOnlyBot
 logging.basicConfig(level=logging.INFO)
 
 INFO_URL = os.environ['INFO_URL']
+TRACKER_BASE_URL = os.environ['TRACKER_BASE_URL'].rstrip("/")
+
+def item_url(id: str):
+    return f"{TRACKER_BASE_URL}/item/{id}"
 
 r.set_loop_type("asyncio")
 bot = SendOnlyBot(os.environ['H2IBOT_POST_URL'])
@@ -22,7 +26,8 @@ QUEUE = Queue("mnbot")
 asyncio.run(QUEUE.check())
 
 async def notify_user(item: Entry, message: str):
-    await bot.send_message(f"{item.queued_by}: Your job {item.id} for {item.item} {message}")
+    url = item_url(item.id)
+    await bot.send_message(f"{item.queued_by}: Your job {item.id} for {item.item} {message} See {url} for more information.")
 
 HANDLERS = {}
 

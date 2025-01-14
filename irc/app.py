@@ -9,6 +9,10 @@ from rue import Queue, Status
 
 H2IBOT_GET_URL = os.environ['H2IBOT_GET_URL']
 H2IBOT_POST_URL = os.environ['H2IBOT_POST_URL']
+TRACKER_BASE_URL = os.environ['TRACKER_BASE_URL'].rstrip("/")
+
+def item_url(id: str):
+    return f"{TRACKER_BASE_URL}/item/{id}"
 
 bot = Bot(H2IBOT_GET_URL, H2IBOT_POST_URL, max_coros = 1)
 
@@ -62,14 +66,14 @@ async def brozzle(self: Bot, user: User, ran, args):
         explanation = args.explanation,
         metadata = {"stealth_ua": args.stealth_ua, "custom_js": custom_js},
     )
-    yield f"Queued {args.url} for Brozzler-based archival. You will be notified when it finishes. Use !status {ent.id} for details."
+    yield f"Queued {args.url} for Brozzler-based archival. You will be notified when it finishes. Use !status {ent.id} or check {item_url(ent.id)} for details."
 brozzle.help = brozzle.parser.format_usage().strip() + brozzle.help
 
 async def generate_status_message(job: str):
     ent = await QUEUE.get(job)
     if not ent:
         return f"No job with ID {repr(job)} could be found. Note: Items cannot currently be looked up by URL."
-    return f"Job {ent.id} ({repr(ent.item)}) has status {ent.status.upper()} and was queued at {ent.queued_at.isoformat(timespec='seconds')}. Explanation: {ent.explanation}"
+    return f"Job {ent.id} ({repr(ent.item)}) has status {ent.status.upper()} and was queued at {ent.queued_at.isoformat(timespec='seconds')}. See {item_url(ent.id)} for more information. Explanation: {ent.explanation}"
 
 @bot.command("!status")
 async def status(self: Bot, user: User, ran, *jobs):
