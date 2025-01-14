@@ -28,6 +28,8 @@ services:
     environment:
       - H2IBOT_GET_URL=http://a:a@192.168.2.228:8080/jsi
       - H2IBOT_POST_URL=http://a:a@192.168.2.228:8080/jsi
+      - TRACKER_BASE_URL="https://mnbot.very-good-quality-co.de/"
+      - DOCUMENTATION_URL="https://wiki.archiveteam.org/index.php/User:TheTechRobo/Chromebot"
     restart: always
     init: true
     depends_on:
