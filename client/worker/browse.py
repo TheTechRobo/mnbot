@@ -1,4 +1,9 @@
-import asyncio, dataclasses, time, typing, urllib.request, json, shutil, os
+### HEY YOU! Yeah, you!
+### If you are making any change to the client, please
+### update the version in meta.py.
+### No two versions in prod should have the same version number.
+
+import asyncio, dataclasses, time, typing, urllib.request, json, shutil
 
 import logging
 logger = logging.getLogger("mnbot")

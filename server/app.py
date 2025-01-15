@@ -116,7 +116,7 @@ async def handle_connection(websocket: ServerConnection):
             await websocket.send(json.dumps({"status": 404, "message": f"Request type {type} does not exist", "seq": seq}))
 
 async def authenticate(username, key):
-    conn = await r.connect()
+    conn = await r.connect(host = os.getenv("RUE_DB_HOST", "localhost"))
     try:
         expected_key = await r.db("mnbot").table("server_secrets").get(username).run(conn)
         return expected_key and hmac.compare_digest(key, expected_key['value'])

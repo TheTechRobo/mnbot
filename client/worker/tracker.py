@@ -1,3 +1,8 @@
+### HEY YOU! Yeah, you!
+### If you are making any change to the client, please
+### update the version in meta.py.
+### No two versions in prod should have the same version number.
+
 import asyncio, logging, json
 import typing
 

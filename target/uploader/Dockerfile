@@ -10,6 +10,6 @@ RUN wget https://gitea.arpa.li/JustAnotherArchivist/little-things/raw/branch/mas
 RUN chmod +x curl-ia ia-upload-stream ia-wait-item-tasks
 
 WORKDIR /app
-COPY run.sh /app
+COPY cmd.sh /app
 COPY to-ia.py /app
-ENTRYPOINT ["/app/run.sh"]
+ENTRYPOINT ["/app/cmd.sh"]

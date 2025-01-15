@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 
+### HEY YOU! Yeah, you!
+### If you are making any change to the client, please
+### update the version in meta.py.
+### No two versions in prod should have the same version number.
+
 import asyncio, logging, random, logging, os, io, signal
 
 logging.basicConfig(format = "%(asctime)s %(levelname)s <:%(thread)s> : %(message)s", level = logging.INFO)
 logger = logging.getLogger("mnbot")
 
-if os.environ.get("DEBUG") == "1":
+from meta import DEBUG
+if DEBUG:
     logger.setLevel(logging.DEBUG)
 else:
     logger.setLevel(logging.INFO)

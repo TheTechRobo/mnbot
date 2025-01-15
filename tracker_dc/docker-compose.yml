@@ -2,42 +2,64 @@
 # Set H2IBOT_* to the correct values
 
 services:
+  rethinkdb:
+    image: rethinkdb:latest
+    restart: always
+    volumes:
+      - ./rethinkdb-data:/data
+    stop_signal: SIGINT
+    ports:
+      - "4183:8080"
+    init: true
+    profiles:
+      # Stop RethinkDB from running by setting DISABLE_RETHINKDB to any nonempty value.
+      # You will have to add RUE_DB_HOST=host.docker.internal to .env
+      # and EXTRA_HOST=host.docker.internal:host-gateway
+      - ${DISABLE_RETHINKDB:-}
   initialise:
-    network_mode: host
     build:
       context: initialise_db
-    restart: on-failure:3
+    restart: on-failure:5
     init: true
+    environment:
+      RUE_DB_HOST: ${RUE_DB_HOST:-rethinkdb}
+    extra_hosts:
+      - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
   tracker:
-    network_mode: host
     build:
       context: ../server
     environment:
-      - H2IBOT_GET_URL=http://a:a@192.168.2.228:8080/jsi
-      - H2IBOT_POST_URL=http://a:a@192.168.2.228:8080/jsi
-      - TRACKER_BASE_URL=https://mnbot.very-good-quality-co.de/
-      - INFO_URL=https://example.com
+      RUE_DB_HOST: ${RUE_DB_HOST:-rethinkdb}
+      H2IBOT_GET_URL: ${H2IBOT_GET_URL}
+      H2IBOT_POST_URL: ${H2IBOT_POST_URL}
+      TRACKER_BASE_URL: ${TRACKER_BASE_URL}
+      INFO_URL: ${INFO_URL}
     restart: always
     init: true
     depends_on:
       initialise:
         condition: service_completed_successfully
+    extra_hosts:
+      - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
+    ports:
+      - 8897:8897
   bot:
-    network_mode: host
     build:
       context: ../irc
     environment:
-      - H2IBOT_GET_URL=http://a:a@192.168.2.228:8080/jsi
-      - H2IBOT_POST_URL=http://a:a@192.168.2.228:8080/jsi
-      - TRACKER_BASE_URL=https://mnbot.very-good-quality-co.de/
-      - DOCUMENTATION_URL=https://wiki.archiveteam.org/index.php/User:TheTechRobo/Chromebot
+      RUE_DB_HOST: ${RUE_DB_HOST:-rethinkdb}
+      H2IBOT_GET_URL: ${H2IBOT_GET_URL}
+      H2IBOT_POST_URL: ${H2IBOT_POST_URL}
+      TRACKER_BASE_URL: ${TRACKER_BASE_URL}
+      DOCUMENTATION_URL: ${DOCUMENTATION_URL}
     restart: always
     init: true
     depends_on:
       initialise:
         condition: service_completed_successfully
+    extra_hosts:
+      - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
   dashboard:
-    network_mode: host
     build:
       context: ../dashboard
     restart: always
@@ -45,3 +67,9 @@ services:
     depends_on:
       initialise:
         condition: service_completed_successfully
+    environment:
+      RUE_DB_HOST: ${RUE_DB_HOST:-rethinkdb}
+    extra_hosts:
+      - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
+    ports:
+      - 8898:8898

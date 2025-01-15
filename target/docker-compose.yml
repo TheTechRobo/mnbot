@@ -5,7 +5,6 @@ services:
     volumes:
       - ./upload-space/rdb:/data
     stop_signal: SIGINT
-    command: rethinkdb --bind 0.0.0.0
     ports:
       - "4184:8080"
     init: true
@@ -70,6 +69,9 @@ services:
       - ./upload-space/toia:/input
       - $HOME/.config/internetarchive/ia.ini:/ia.ini
     environment:
-      - IA_CONFIG_FILE=/ia.ini
+      - IA_CONFIG_FILE=${IA_CONFIG_FILE}
+      - ITEM_TITLE=${ITEM_TITLE}
+      - ITEM_DESC=${ITEM_DESC}
+      - ITEM_COLLECTION=${ITEM_COLLECTION}
     init: true
 
