@@ -24,7 +24,7 @@ print("setup complete")
 AIOHTTP_SESSION = None
 
 @bot.add_argument("--stealth-ua", action = "store_true")
-@bot.add_argument("--explanation")
+@bot.add_argument("--explanation", "--explain", "-e")
 @bot.add_argument("--custom-js")
 @bot.add_argument("url")
 @bot.argparse("!brozzle")
