@@ -67,9 +67,9 @@ services:
       context: uploader
     volumes:
       - ./upload-space/toia:/input
-      - $HOME/.config/internetarchive/ia.ini:/ia.ini
+      - ${IA_CONFIG_FILE}:/ia.ini:ro
     environment:
-      - IA_CONFIG_FILE=${IA_CONFIG_FILE}
+      - IA_CONFIG_FILE=/ia.ini
       - ITEM_TITLE=${ITEM_TITLE}
       - ITEM_DESC=${ITEM_DESC}
       - ITEM_COLLECTION=${ITEM_COLLECTION}
