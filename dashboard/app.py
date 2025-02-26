@@ -12,6 +12,7 @@ from rue import Queue
 QUEUE = Queue("mnbot")
 
 app = EscapingQuart(__name__)
+app.jinja_env.globals.update(isinstance = isinstance)
 
 NAV = (
     ("/", "Dashboard"),

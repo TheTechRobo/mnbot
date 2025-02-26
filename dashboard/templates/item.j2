@@ -79,7 +79,21 @@
 					<li>
 						<details>
 							<summary><code>{{ result.type }}</code> (click to show)</summary>
-							<code>{{ result.data }}</code>
+							{% if result.type == "outlinks" %}
+								<ul>
+									{% for outlink in result.data %}
+										<li>
+											<a href="{{ outlink }}">
+												<code>{{ outlink }}</code>
+											</a>
+										</li>
+									{% endfor %}
+								</ul>
+							{% else %}
+								<code>
+									{{ result.data }}
+								</code>
+							{% endif %}
 						</details>
 					</li>
 				{% endfor %}

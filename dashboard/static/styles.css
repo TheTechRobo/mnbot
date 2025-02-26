@@ -16,3 +16,7 @@ nav {
 	justify-content: flex-end;
 }
 
+a code {
+	text-decoration: underline;
+}
+
