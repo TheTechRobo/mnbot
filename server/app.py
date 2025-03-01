@@ -16,7 +16,9 @@ logging.basicConfig(level=logging.INFO)
 INFO_URL = os.environ['INFO_URL']
 TRACKER_BASE_URL = os.environ['TRACKER_BASE_URL'].rstrip("/")
 
-def item_url(id: str):
+def item_url(id: str | None):
+    if not id:
+        return "<N/A>"
     return f"{TRACKER_BASE_URL}/item/{id}"
 
 r.set_loop_type("asyncio")
@@ -39,7 +41,7 @@ def handler(msg_type: str):
     return decorator
 
 Response: typing.TypeAlias = tuple[int, typing.Optional[dict[str, typing.Any]]]
-HandlerContext = collections.namedtuple("HandlerContext", ["message", "username"])
+HandlerContext = collections.namedtuple("HandlerContext", ["message", "username", "version"])
 
 @handler("System:ping")
 async def pong(ctx: HandlerContext) -> Response:
@@ -48,10 +50,10 @@ async def pong(ctx: HandlerContext) -> Response:
 
 @handler("Item:claim")
 async def get(ctx: HandlerContext, *, pipeline_type) -> Response:
-    item = await QUEUE.claim(ctx.username, pipeline_type)
+    item = await QUEUE.claim(ctx.username, pipeline_type, ctx.version)
     if item:
         payload = {
-            "item": item.as_json_friendly_dict(),
+            "item": item.as_json_friendly_dict() | {"_current_attempt": item.attempt_number()},
             "info_url": INFO_URL
         }
     else:
@@ -62,21 +64,21 @@ async def get(ctx: HandlerContext, *, pipeline_type) -> Response:
     return 200, payload
 
 @handler("Item:fail")
-async def fail(ctx: HandlerContext, *, id, message) -> Response:
+async def fail(ctx: HandlerContext, *, id, message, attempt) -> Response:
     item = await QUEUE.get(id)
     if not item:
         raise Exception("item does not exist")
-    new_item = await QUEUE.fail(item, f"Pipeline {ctx.username} reported failure: {message}")
+    new_item = await QUEUE.fail(item, f"Pipeline {ctx.username} reported failure: {message}", attempt)
     if new_item.status == Status.ERROR:
         await notify_user(new_item, "has failed.")
     return 204, None
 
 @handler("Item:store")
-async def store(ctx: HandlerContext, *, id, result, tries, result_type):
+async def store(ctx: HandlerContext, *, id, result, attempt, result_type):
     item = await QUEUE.get(id)
     if not item:
         raise Exception("item does not exist")
-    new_item = await QUEUE.store_result(item, ctx.username, tries, result, result_type)
+    new_item = await QUEUE.store_result(item, attempt, result, result_type)
     return 201, {"new_id": new_item}
 
 @handler("Item:finish")
@@ -89,6 +91,8 @@ async def finish(ctx: HandlerContext, *, id) -> Response:
     return 204, None
 
 async def handle_connection(websocket: ServerConnection):
+    initial = json.loads(await websocket.recv())
+    version = initial['v']
     async for message in websocket:
         try:
             message = json.loads(message)
@@ -102,7 +106,7 @@ async def handle_connection(websocket: ServerConnection):
             continue
         if callback := HANDLERS.get(type):
             try:
-                ctx = HandlerContext(message = message, username = websocket.username)
+                ctx = HandlerContext(message = message, username = websocket.username, version = version)
                 # TODO: Detect when payload params don't match up
                 #       and return 400
                 status, payload = await callback(ctx, **message.get("request") or {})
@@ -126,14 +130,16 @@ async def authenticate(username, key):
         except Exception:
             pass
 
+authenticator = basic_auth(
+    realm = "mnbot item server",
+    check_credentials = authenticate
+)
+
 async def main():
     async with serve(
         handle_connection,
         "0.0.0.0", 8897,
-        process_request=basic_auth(
-            realm="mnbot item server",
-            check_credentials=authenticate
-        ),
+        process_request = authenticator,
         max_size=2**25
     ) as server:
         await server.serve_forever()

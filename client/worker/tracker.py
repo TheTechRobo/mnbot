@@ -6,6 +6,8 @@
 import asyncio, logging, json
 import typing
 
+from meta import VERSION
+
 logger = logging.getLogger("mnbot")
 del logging
 
@@ -25,6 +27,7 @@ class Websocket:
             if not self.conn:
                 logger.debug("creating connection")
                 self.conn = await connect(self.url)
+                await self.conn.send(json.dumps({"v": VERSION}))
             self.seq += 1
             seq = self.seq
             message = {"type": type, "request": payload, "seq": seq}
@@ -78,8 +81,8 @@ class Websocket:
             return resp['item'], resp['info_url']
         return None
 
-    async def fail_item(self, id: str, reason: str):
-        status, resp = await self._send("Item:fail", {"id": id, "message": reason})
+    async def fail_item(self, id: str, reason: str, tries: int):
+        status, resp = await self._send("Item:fail", {"id": id, "message": reason, "attempt": tries})
         if status != 204:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
 
@@ -91,7 +94,7 @@ class Websocket:
     async def store_result(self, id: str, result_type: str, tries: int, result):
         status, resp = await self._send("Item:store", {
             "result_type": result_type,
-            "tries": tries,
+            "attempt": tries,
             "result": result,
             "id": id
         })

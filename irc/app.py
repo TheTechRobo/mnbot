@@ -12,7 +12,9 @@ H2IBOT_POST_URL = os.environ['H2IBOT_POST_URL']
 TRACKER_BASE_URL = os.environ['TRACKER_BASE_URL'].rstrip("/")
 DOCUMENTATION_URL = os.environ['DOCUMENTATION_URL']
 
-def item_url(id: str):
+def item_url(id: str | None):
+    if not id:
+        return "<N/A>"
     return f"{TRACKER_BASE_URL}/item/{id}"
 
 bot = Bot(H2IBOT_GET_URL, H2IBOT_POST_URL, max_coros = 1)
@@ -122,11 +124,11 @@ async def abandon(self: Bot, user: User, ran, id: str, *reason):
         return
     reason = f"Manual reclaim by {user.nick}: {' '.join(reason)}"
     yield f"Explanation: {reason!r}"
-    new_item = await QUEUE.fail(item, reason)
+    new_item = await QUEUE.fail(item, reason, len(item.attempts) - 1, is_poke = True)
     if new_item.status == Status.ERROR:
         yield f"Max tries reached for {new_item.id}, it has been moved to ERROR."
     elif new_item.status == Status.TODO:
-        yield f"{new_item.id} has been moved to todo. Tries: {new_item.tries}"
+        yield f"{new_item.id} has been moved to todo. Tries: {len(new_item.attempts)}"
     else:
         yield f"Unexpected status {new_item.status} for item {new_item.id}. This is probably bad."
 

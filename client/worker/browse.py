@@ -195,6 +195,11 @@ class Brozzler:
             cookie_db = job.cookie_jar
         )
 
+        # Shim for _handle_message so we can log responses
+        # on_request and on_response don't allow us to see errors
+        # Coming soon to an mnbot near you! (I forgor to commit and probably should.)
+        #logger.debug("shimming brozzler")
+
         logger.debug("getting user agent")
         ua = self._run_cdp_command(
             browser,
@@ -330,7 +335,7 @@ class Brozzler:
             self.pool.release(browser)
 
     async def run_job(self, ws: "Websocket", full_job: dict, url: str, warc_prefix: str, stealth_ua: bool, custom_js: typing.Optional[str], info_url: str):
-        tries = full_job['tries']
+        tries = full_job['_current_attempt']
         id = full_job['id']
         #dedup_bucket = f"dedup-{id}-{tries}"
         dedup_bucket = ""

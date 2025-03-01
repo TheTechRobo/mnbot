@@ -42,10 +42,10 @@ async def single_item(id):
     if not item:
         return await render_template("error.j2", reason = "Item not found", description = f"Item {id} was not found.")
     results = {}
+    for attempt in range(len(item.attempts)):
+        results[attempt] = []
     async for result in QUEUE.get_results(item):
-        rs = results.get(result.tries, [])
-        rs.append(result)
-        results[result.tries] = rs
+        results[result.attempt].append(result)
     dict(results = sorted(results))
     return await render_template("item.j2", item = item, results = results)
 

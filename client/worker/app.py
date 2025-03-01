@@ -5,6 +5,7 @@
 ### update the version in meta.py.
 ### No two versions in prod should have the same version number.
 
+import enum
 import asyncio, logging, random, logging, os, io, signal
 
 logging.basicConfig(format = "%(asctime)s %(levelname)s <:%(thread)s> : %(message)s", level = logging.INFO)
@@ -28,6 +29,11 @@ CONNECT = os.environ['TRACKER_URL']
 
 STOP = asyncio.Event()
 
+class TaskType(enum.Enum):
+    SLEEP = enum.auto()
+    CLEANUP = enum.auto()
+    ITEM = enum.auto()
+
 async def main():
     async def handler(advisory: dict):
         print("Received advisory", advisory)
@@ -46,18 +52,18 @@ async def main():
             await asyncio.sleep(15)
 
     MAX_WORKERS = 1
-    workers = dict()
+    workers: dict[asyncio.Task, tuple[TaskType, dict | None]] = dict()
     brozzler = browse.Brozzler(MAX_WORKERS)
 
     def handle_sigint():
         logger.debug("sigint")
         if not STOP.is_set():
-            for task, val in workers.items():
-                if not val:
+            for task, (task_type, _val) in workers.items():
+                if task_type == TaskType.SLEEP:
                     # Sleep task; safe to cancel
                     logger.debug(f"cancelling {task}")
                     task.cancel()
-                elif val.endswith("_cleanup"):
+                elif task_type == TaskType.CLEANUP:
                     # Cleanup task; not ideal to cancel
                     pass
                 else:
@@ -97,33 +103,36 @@ async def main():
                     info_url
                 ))
                 task.set_name(id)
+                workers[task] = (TaskType.ITEM, item)
             else:
                 to_sleep = random.randint(10, 30)
                 logger.info(f"No items found, blocking this worker for {to_sleep} seconds.")
                 task = asyncio.create_task(asyncio.sleep(to_sleep))
-                id = None
-            workers[task] = id
+                workers[task] = (TaskType.SLEEP, None)
         done: set[asyncio.Task] = (await asyncio.wait(workers, return_when = asyncio.FIRST_COMPLETED))[0]
         for finished_task in done:
             logger.debug(f"checking finished task {finished_task}")
-            id = workers[finished_task]
+            task_type, item = workers[finished_task]
             del workers[finished_task]
-            if not id or id.endswith("_cleanup"):
+            if task_type != TaskType.ITEM:
                 logger.debug("nevermind, not an item")
                 continue
+            # item can't be None at this point
+            id = item['id']
+            tries = item['_current_attempt']
             try:
                 _dedup_bucket, _stats_bucket = finished_task.result()
             except Exception:
                 logger.exception(f"failed task {id}:")
                 fmt = io.StringIO()
                 finished_task.print_stack(file = fmt)
-                await ws.fail_item(id, f"Caught exception!\n{fmt.getvalue()}")
+                await ws.fail_item(id, f"Caught exception!\n{fmt.getvalue()}", tries)
             else:
                 logger.debug("task was successful!")
                 await ws.finish_item(id)
                 logger.debug("creating cleanup task")
                 task = asyncio.create_task(browse.warcprox_cleanup())
-                workers[task] = f"{id}_cleanup"
+                workers[task] = (TaskType.CLEANUP, None)
     pt.cancel()
 
 asyncio.run(main())

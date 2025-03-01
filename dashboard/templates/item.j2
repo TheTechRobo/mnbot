@@ -31,7 +31,7 @@
 			<li><b>Custom JavaScript: </b>None</li>
 		{% endif %}
 		<li><b>Pipeline type: </b>{{ item.pipeline_type }}</li>
-		<li><b>Priority: </b>{{ item.priority }} (effective {{ item.priority + item.tries }})</li>
+		<li><b>Priority: </b>{{ item.priority }} (effective {{ item.priority + item.attempt_number() + 1 }})</li>
 		<li><b>Queued at: </b>{{ item.queued_at.replace(microsecond=0) }}</li>
 		{% if item.claimed_at %}
 			<li><b>Last claimed at: </b>{{ item.claimed_at.replace(microsecond=0) }}</li>
@@ -39,18 +39,12 @@
 		{% if item.finished_at %}
 			<li><b>Finished at: </b>{{ item.finished_at.replace(microsecond=0) }}</li>
 		{% endif %}
-		<li><b>Tries: </b>{{ item.tries }}</li>
-		{% if item.error_reasons %}
+		<li><b>Tries: </b>{{ item.attempt_number() + 1 }}</li>
+		{% if error_reasons %}
 			<li>
 				<b>Error reasons:</b>
 				<ul>
 					{% for reason in item.error_reasons %}
-						<li>
-							<details>
-								<summary><code>{{ reason.split('\n')[0].strip() }}</code> {% if '\n' in reason %}(click for full message) {% endif %}</summary>
-								<pre>{{ reason }}</pre>
-							</details>
-						</li>
 					{% endfor %}
 				</ul>
 			</li>
@@ -74,7 +68,9 @@
 	{% if results %}
 		<ul>
 			{% for try, try_results in results.items() %}
-				<b>Try {{ try }} (on pipeline {{ try_results[0].pipeline }})</b>
+				<b>
+					Try {{ try }} (on pipeline {{ item.attempts[try].pipeline }} {{ item.attempts[try].pipeline_version or "" }})
+				</b>
 				{% for result in try_results %}
 					<li>
 						<details>
@@ -97,10 +93,26 @@
 						</details>
 					</li>
 				{% endfor %}
+				{% if item.attempts[try].error %}
+					<li>
+						<details>
+							<summary>Error: <code>{{ item.attempts[try].error.split('\n')[0].strip() }}</code> {% if '\n' in reason %}(click for full message) {% endif %}</summary>
+							<pre>{{ item.attempts[try].error }}</pre>
+						</details>
+					</li>
+				{% endif %}
+				{% if item.attempts[try].poke_reason %}
+					<li>
+						<details>
+							<summary>Admin poke reason: <code>{{ item.attempts[try].poke_reason.split('\n')[0].strip() }}</code> {% if '\n' in reason %}(click for full message) {% endif %}</summary>
+							<pre>{{ item.attempts[try].poke_reason }}</pre>
+						</details>
+					</li>
+				{% endif %}
 			{% endfor %}
 		</ul>
 	{% else %}
-		<p>No results exist for this item. It may not have finished yet. If the item is in done and there are no results, please contact an admin, as that's probably not right.</p>
+		<p>This item has not been tried yet.</p>
 	{% endif %}
 </section>
 
