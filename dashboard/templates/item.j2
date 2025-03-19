@@ -31,7 +31,7 @@
 			<li><b>Custom JavaScript: </b>None</li>
 		{% endif %}
 		<li><b>Pipeline type: </b>{{ item.pipeline_type }}</li>
-		<li><b>Priority: </b>{{ item.priority }} (effective {{ item.priority + item.attempt_number() + 1 }})</li>
+		<li><b>Priority: </b>{{ item.priority }} (effective {{ item.priority + item.attempt_count() }})</li>
 		<li><b>Queued at: </b>{{ item.queued_at.replace(microsecond=0) }}</li>
 		{% if item.claimed_at %}
 			<li><b>Last claimed at: </b>{{ item.claimed_at.replace(microsecond=0) }}</li>
@@ -39,7 +39,7 @@
 		{% if item.finished_at %}
 			<li><b>Finished at: </b>{{ item.finished_at.replace(microsecond=0) }}</li>
 		{% endif %}
-		<li><b>Tries: </b>{{ item.attempt_number() + 1 }}</li>
+		<li><b>Tries: </b>{{ item.attempt_count() }}</li>
 		{% if error_reasons %}
 			<li>
 				<b>Error reasons:</b>
@@ -69,7 +69,7 @@
 		<ul>
 			{% for try, try_results in results.items() %}
 				<b>
-					Try {{ try }} (on pipeline {{ item.attempts[try].pipeline }} {{ item.attempts[try].pipeline_version or "" }})
+					Attempt {{ try + 1 }} (on pipeline {{ item.attempts[try].pipeline }} {{ item.attempts[try].pipeline_version or "" }})
 				</b>
 				{% for result in try_results %}
 					<li>
@@ -85,6 +85,54 @@
 										</li>
 									{% endfor %}
 								</ul>
+							{% elif result.type == "requisites" %}
+								<table>
+									<tr>
+										<th>Status</th>
+										<th>Type</th>
+										<th>Category</th>
+										<th>Length</th>
+										<th>Method</th>
+										<th>URL</th>
+									</tr>
+									{% for requisite in result.data %}
+										{% for pair in requisite['chain'] %}
+											<tr>
+												{% if pair.response._type == "Response" %}
+													<td>{{ pair.response.status[0] }} {{ pair.response.status[1] }}</td>
+													<td>{{ pair.response.mimetype or "-" }}</td>
+												{% elif pair.response._type == "Error" %}
+													<td>Error</td>
+													<td>{{ pair.response.text }}</td>
+												{% elif pair.response is none %}
+													<td>None</td>
+													<td>No response</td>
+												{% else %}
+													<td>Unknown - this is a bug</td>
+													<td></td>
+												{% endif %}
+												{% if loop.first %}
+													<td>{{ pair.request.category }}</td>
+												{% else %}
+													<td>Redirect &uarr;</td>
+												{% endif %}
+												{% if pair.response.length is none %}
+													<td>?</td>
+												{% elif pair.response.length is not defined %}
+													<td>n/a</td>
+												{% else %}
+													<td>{{ pair.response.length }}</td>
+												{% endif %}
+												<td>{{ pair.request.method }}</td>
+												<td>
+													<a href="{{ pair.request.url }}">
+														{{ pair.request.url }}
+													</a>
+												</td>
+											</tr>
+										{% endfor %}
+									{% endfor %}
+								</table>
 							{% else %}
 								<code>
 									{{ result.data }}

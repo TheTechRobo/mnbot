@@ -1,4 +1,4 @@
-FROM python:3.9-bookworm
+FROM python:3.11-bookworm
 
 # Add user for Chromium to run as. (It's unhappy as root.)
 RUN groupadd --gid 1000 mnbot \
@@ -20,6 +20,7 @@ COPY app.py /app
 COPY browse.py /app
 COPY meta.py /app
 COPY tracker.py /app
+COPY result.py /app
 
 USER mnbot
 #ENV DISPLAY x:2.0

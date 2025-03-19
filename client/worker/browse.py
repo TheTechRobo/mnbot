@@ -11,6 +11,7 @@ del logging
 
 from meta import VERSION
 from rethinkdb import r
+from result import *
 
 if typing.TYPE_CHECKING:
     from tracker import Websocket
@@ -76,12 +77,15 @@ class Result:
     outlinks: list
     custom_js_result: typing.Optional[dict]
     status_code: int
+    requisites: dict[str, Chain]
 
+    # Create a dict to write to the WARC
     def dict(self) -> dict[str, typing.Any]:
         return {
             "final_url": self.final_url,
             "outlinks": self.outlinks,
-            "custom_js_result": self.custom_js_result
+            "custom_js_result": self.custom_js_result,
+            "requisites": [dataclasses.asdict(v) for v in self.requisites.values()]
             # Don't include status code because that's already in the WARC
         }
 
@@ -196,9 +200,40 @@ class Brozzler:
         )
 
         # Shim for _handle_message so we can log responses
-        # on_request and on_response don't allow us to see errors
-        # Coming soon to an mnbot near you! (I forgor to commit and probably should.)
-        #logger.debug("shimming brozzler")
+        # on_request and on_response don't allow us to see errors or the *final* response size
+        url_log: dict[str, Chain] = {}
+        logger.debug("shimming brozzler")
+        previous_message_handler = browser.websock_thread._handle_message
+        def message_handler(websock, json_message: str):
+            # brozzler gets priority so an exception can't lose messages
+            previous_message_handler(websock, json_message)
+            message = json.loads(json_message)
+            if "method" in message:
+                method = message['method']
+                params = message['params']
+                if method == "Network.requestWillBeSent":
+                    request_id = params['requestId']
+                    if request_id not in url_log:
+                        url_log[request_id] = Chain([], request_id)
+                    if redirect_response := params.get("redirectResponse"):
+                        url_log[request_id].chain[-1].response = Response.from_dict(redirect_response)
+                    request = Request.from_params(params)
+                    url_log[request_id].chain.append(Pair(request, None))
+                elif method == "Network.responseReceived":
+                    request_id = params['requestId']
+                    response = Response.from_params(params)
+                    url_log[request_id].chain[-1].response = response
+                elif method == "Network.dataReceived":
+                    request_id = params['requestId']
+                    url_log[request_id].chain[-1].response.length += params['dataLength']
+                elif method == "Network.loadingFinished":
+                    # Future: Submit log to websocket
+                    pass
+                elif method == "Network.loadingFailed":
+                    request_id = params['requestId']
+                    error = Error(text = params['errorText'])
+                    url_log[request_id].chain[-1].response = error
+        browser.websock_thread._handle_message = message_handler
 
         logger.debug("getting user agent")
         ua = self._run_cdp_command(
@@ -311,7 +346,8 @@ class Brozzler:
             final_url = final_url,
             outlinks = list(outlinks),
             custom_js_result = custom_js_result,
-            status_code = status_code
+            status_code = status_code,
+            requisites = url_log
         )
         logger.debug("writing job result data")
         self._write_warcprox_record(
@@ -358,8 +394,12 @@ class Brozzler:
         await ws.store_result(id, "status_code", tries, result.status_code)
         await ws.store_result(id, "outlinks", tries, result.outlinks)
         await ws.store_result(id, "final_url", tries, result.final_url)
+        requisites = [dataclasses.asdict(v) for v in result.requisites.values()]
+        await ws.store_result(id, "requisites", tries, requisites)
         if result.status_code >= 400:
             raise RuntimeError(f"Bad status code {result.status_code}")
+        if not result.final_url.startswith("http"):
+            raise RuntimeError(f"Bad final_url {result.final_url}")
         if jsr := result.custom_js_result:
             await ws.store_result(id, "custom_js", tries, jsr)
             if jsr['status'] != "success":

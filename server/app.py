@@ -53,7 +53,7 @@ async def get(ctx: HandlerContext, *, pipeline_type) -> Response:
     item = await QUEUE.claim(ctx.username, pipeline_type, ctx.version)
     if item:
         payload = {
-            "item": item.as_json_friendly_dict() | {"_current_attempt": item.attempt_number()},
+            "item": item.as_json_friendly_dict() | {"_current_attempt": item.current_attempt()},
             "info_url": INFO_URL
         }
     else:
