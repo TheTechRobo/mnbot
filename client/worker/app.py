@@ -5,13 +5,31 @@
 ### update the version in meta.py.
 ### No two versions in prod should have the same version number.
 
+import asyncio
+import concurrent.futures
+import dataclasses
 import enum
-import asyncio, logging, random, logging, os, io, signal
+import io
+import json
+import logging
+import os
+import random
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import typing
+import urllib.request
 
-logging.basicConfig(format = "%(asctime)s %(levelname)s <:%(thread)s> : %(message)s", level = logging.INFO)
+import aiofiles
+
+PYTHON = shutil.which("python3")
+assert PYTHON, "Could not find the Python interpreter."
+
 logger = logging.getLogger("mnbot")
 
-from meta import DEBUG
+from shared import DEBUG, PROXY_URL, Job
 if DEBUG:
     logger.setLevel(logging.DEBUG)
 else:
@@ -22,10 +40,146 @@ from tracker import Websocket
 
 from rethinkdb import r
 
-import browse
+CONNECT = os.environ['TRACKER_URL']
+
+class ItemFailedException(Exception):
+    """
+    Raised to provide a custom failure message for the item.
+    """
+    def __init__(self, msg):
+        self.msg = msg
+
+# Wait for warcprox to start
+while True:
+    try:
+        with urllib.request.urlopen("http://" + PROXY_URL.rstrip("/") + "/status") as conn:
+            if conn.getcode() == 200:
+                break
+            else:
+                logger.info("warcprox isn't healthy yet, sleeping")
+                time.sleep(5)
+    except Exception:
+        logger.info("no warcprox yet, sleeping")
+        time.sleep(5)
+
+# Convenience function to get the dedup DB
+def _dedup_db():
+    return r.db("cb-warcprox").table("dedup")
+
+# Add our index
+def _setup_db():
+    conn = r.connect(host = "rethinkdb")
+    indexes = _dedup_db().index_list().run(conn)
+    #if "mnbot-bucket" not in indexes:
+    #    _dedup_db().index_create("mnbot-bucket", lambda row : row['key'].split("|", 1)).run(conn)
+    if "mnbot-date" not in indexes:
+        _dedup_db().index_create("mnbot-date", r.iso8601(r.row['date'])).run(conn)
+    conn.close()
+_setup_db()
 r.set_loop_type("asyncio")
 
-CONNECT = os.environ['TRACKER_URL']
+async def warcprox_cleanup():
+    conn = None
+    try:
+        conn = await r.connect(host = "rethinkdb")
+        # We don't currently clean up the stats bucket as warcprox does it in batches, so when
+        # this function runs, warcprox is going to re-add it in a few seconds anyway.
+        logger.debug("deleting old dedup records")
+        res = await (
+            _dedup_db()
+            # Deletes records more than 7 days old, to prevent the database from blowing up
+            # and to make sure that corrupt records don't forever cause a URL to be lost
+            .between(r.minval, r.now() - 7*24*3600, index = "mnbot-date")
+            .delete(durability = "soft")
+            .run(conn)
+        )
+        logger.debug(f"queued {res['deleted']} old dedup records for deletion")
+    except Exception:
+        logger.exception(f"failed to clean up old records")
+    finally:
+        try:
+            if conn:
+                await conn.close()
+        except Exception:
+            pass
+
+async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, stealth_ua: bool, custom_js: typing.Optional[str], info_url: str):
+    tries = full_job['_current_attempt']
+    id = full_job['id']
+    #dedup_bucket = f"dedup-{id}-{tries}"
+    dedup_bucket = ""
+    stats_bucket = f"stats-{id}-{tries}"
+    job = Job(
+        full_job = full_job,
+        url = url,
+        warc_prefix = warc_prefix,
+        dedup_bucket = dedup_bucket,
+        stats_bucket = stats_bucket,
+        stealth_ua = stealth_ua,
+        custom_js = custom_js,
+        cookie_jar = None,
+        mnbot_info_url = info_url
+    )
+    job_data = json.dumps(dataclasses.asdict(job))
+    pread, pwrite = os.pipe()
+    assert PYTHON
+    process = await asyncio.create_subprocess_exec(
+        PYTHON,
+        os.path.join(os.path.dirname(sys.argv[0]), "browse.py"),
+        str(pwrite),
+        id, # useful for ps
+        stdin = subprocess.PIPE,
+        stdout = subprocess.PIPE,
+        stderr = subprocess.STDOUT,
+        pass_fds = (pwrite,),
+    )
+    os.close(pwrite)
+
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        async with aiofiles.open(pread, "r", executor = pool) as pread:
+            stdout = process.stdout
+            stdin = process.stdin
+            assert stdin and stdout
+            stdin.write(job_data.encode() + b"\n")
+            await stdin.drain()
+            stdin.close()
+
+            # This bit of the code is a little ugly since we can't cancel aiofiles' coroutines.
+            # The general idea is that we create a set with coroutines awaiting the
+            # next lines of both stdout and pread, and then replenish whichever one completed.
+            # Continue doing that until EOF.
+            coros = set((
+                asyncio.create_task(stdout.readline(), name = "stdout"),
+                asyncio.create_task(pread.readline(), name = "pread"),
+            ))
+            while coros:
+                done, pending = await asyncio.wait(coros, return_when = asyncio.FIRST_COMPLETED)
+                for coro in done:
+                    res = await coro
+                    if not res:
+                        # EOF reached, don't create another task of this type
+                        continue
+                    if coro.get_name() == "stdout":
+                        if res := res.decode().strip():
+                            print(f"stdout[{id}]: {res}", flush = True)
+                        pending.add(asyncio.create_task(stdout.readline(), name = "stdout"))
+                    elif coro.get_name() == "pread":
+                        logger.debug(f"pread received: {res}")
+                        pending.add(asyncio.create_task(pread.readline(), name = "pread"))
+                        res = json.loads(res)
+                        type = res['type']
+                        payload = res['payload']
+                        if type in ("status_code", "outlinks", "final_url", "requisites", "custom_js"):
+                            await ws.store_result(id, type, tries, payload)
+                        elif type == "error":
+                            raise ItemFailedException(f"Subprocess reported error: {payload}")
+                    else:
+                        raise RuntimeError(f"invalid coro type! {coro}")
+                coros = pending
+        code = await process.wait()
+        if code != 0:
+            raise RuntimeError(f"Exited with code {code}")
+    return dedup_bucket, stats_bucket
 
 STOP = asyncio.Event()
 
@@ -53,7 +207,6 @@ async def main():
 
     MAX_WORKERS = 1
     workers: dict[asyncio.Task, tuple[TaskType, dict | None]] = dict()
-    brozzler = browse.Brozzler(MAX_WORKERS)
 
     def handle_sigint():
         logger.debug("sigint")
@@ -84,7 +237,7 @@ async def main():
             if STOP.is_set():
                 logger.debug("not spinning up new item as we are pending a stop")
                 continue
-            logger.debug(f"spinning up worker")
+            logger.debug("spinning up worker")
             resp = await ws.claim_item()
             if resp:
                 item, info_url = resp
@@ -93,7 +246,7 @@ async def main():
                 url = item['item']
                 assert "_" not in id
                 prefix = "mnbot-brozzler-" + id.replace("-", "_")
-                task = asyncio.create_task(brozzler.run_job(
+                task = asyncio.create_task(run_job(
                     ws,
                     item,
                     url,
@@ -122,16 +275,20 @@ async def main():
             tries = item['_current_attempt']
             try:
                 _dedup_bucket, _stats_bucket = finished_task.result()
-            except Exception:
-                logger.exception(f"failed task {id}:")
-                fmt = io.StringIO()
-                finished_task.print_stack(file = fmt)
-                await ws.fail_item(id, f"Caught exception!\n{fmt.getvalue()}", tries)
+            except Exception as e:
+                if isinstance(e, ItemFailedException):
+                    message = e.msg
+                else:
+                    logger.exception(f"failed task {id}:")
+                    fmt = io.StringIO()
+                    finished_task.print_stack(file = fmt)
+                    message = f"Caught exception!\n{fmt.getvalue()}"
+                await ws.fail_item(id, message, tries)
             else:
                 logger.debug("task was successful!")
                 await ws.finish_item(id)
                 logger.debug("creating cleanup task")
-                task = asyncio.create_task(browse.warcprox_cleanup())
+                task = asyncio.create_task(warcprox_cleanup())
                 workers[task] = (TaskType.CLEANUP, None)
     pt.cancel()
 

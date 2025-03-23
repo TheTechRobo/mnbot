@@ -9,7 +9,7 @@ import logging
 from rethinkdb import r
 from websockets.asyncio.server import ServerConnection, basic_auth, serve
 from rue import Entry, Queue, Status
-from bot2h import SendOnlyBot
+from bot2h import Format, SendOnlyBot, Colour
 
 logging.basicConfig(level=logging.INFO)
 
@@ -63,14 +63,16 @@ async def get(ctx: HandlerContext, *, pipeline_type) -> Response:
         }
     return 200, payload
 
+RED = Colour.make_colour(Colour.RED, escape = False)
+RESET = Format.RESET
 @handler("Item:fail")
 async def fail(ctx: HandlerContext, *, id, message, attempt) -> Response:
     item = await QUEUE.get(id)
     if not item:
         raise Exception("item does not exist")
-    new_item = await QUEUE.fail(item, f"Pipeline {ctx.username} reported failure: {message}", attempt)
+    new_item = await QUEUE.fail(item, message, attempt)
     if new_item.status == Status.ERROR:
-        await notify_user(new_item, "has failed.")
+        await notify_user(new_item, f"has {RED}failed{RESET}.")
     return 204, None
 
 @handler("Item:store")

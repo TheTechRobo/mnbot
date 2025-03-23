@@ -12,13 +12,13 @@ RUN apt-get update \
 		&& apt-get clean
 
 # eb922f515545783158915a5edfb95f4548ad65c1 is known to work.
-RUN pip3 install --break-system-packages rethinkdb git+https://github.com/internetarchive/brozzler@eb922f515545783158915a5edfb95f4548ad65c1 websockets doublethink yt-dlp
+RUN pip3 install --break-system-packages rethinkdb git+https://github.com/internetarchive/brozzler@eb922f515545783158915a5edfb95f4548ad65c1 websockets doublethink yt-dlp aiofiles
 RUN pip3 install --break-system-packages --upgrade rethinkdb
 
 RUN mkdir /app
 COPY app.py /app
 COPY browse.py /app
-COPY meta.py /app
+COPY shared.py /app
 COPY tracker.py /app
 COPY result.py /app
 

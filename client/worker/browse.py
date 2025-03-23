@@ -1,93 +1,26 @@
+# This file is called as a subprocess from app.py.
+# It takes one argument in argv, which is a file descriptor for outputting control data.
+
 ### HEY YOU! Yeah, you!
 ### If you are making any change to the client, please
 ### update the version in meta.py.
 ### No two versions in prod should have the same version number.
 
-import asyncio, dataclasses, time, typing, urllib.request, json, shutil
+import typing, urllib.request, json, shutil, sys, traceback
+
+from shared import DEBUG, VERSION, PROXY_URL, Job, Result
+from result import *
 
 import logging
 logger = logging.getLogger("mnbot")
+if DEBUG:
+    logger.setLevel(logging.DEBUG)
+else:
+    logger.setLevel(logging.INFO)
 del logging
-
-from meta import VERSION
-from rethinkdb import r
-from result import *
-
-if typing.TYPE_CHECKING:
-    from tracker import Websocket
 
 import brozzler
 import requests
-
-PROXY_URL = "warcprox:8000"
-
-######### INITIALISATION #########
-
-# Wait for warcprox to start
-while True:
-    try:
-        with urllib.request.urlopen("http://" + PROXY_URL.rstrip("/") + "/status") as conn:
-            if conn.getcode() == 200:
-                break
-            else:
-                logger.info("warcprox isn't healthy yet, sleeping")
-                time.sleep(5)
-    except Exception:
-        logger.info("no warcprox yet, sleeping")
-        time.sleep(5)
-
-# Convenience function to get the dedup DB
-def _dedup_db():
-    return r.db("cb-warcprox").table("dedup")
-
-# Convenience function to get the stats DB
-def _stats_db():
-    return r.db("cb-warcprox").table("stats")
-
-# Add our index
-def _setup_db():
-    conn = r.connect(host = "rethinkdb")
-    indexes = _dedup_db().index_list().run(conn)
-    #if "mnbot-bucket" not in indexes:
-    #    _dedup_db().index_create("mnbot-bucket", lambda row : row['key'].split("|", 1)).run(conn)
-    if "mnbot-date" not in indexes:
-        _dedup_db().index_create("mnbot-date", r.iso8601(r.row['date'])).run(conn)
-    conn.close()
-_setup_db()
-r.set_loop_type("asyncio")
-
-######### THE ACTUALLY IMPORTANT STUFF #########
-
-@dataclasses.dataclass
-class Job:
-    full_job: dict
-    url: str
-    warc_prefix: str
-    dedup_bucket: str
-    stats_bucket: str
-    stealth_ua: bool
-    custom_js: typing.Optional[str]
-    cookie_jar: typing.Optional[bytes]
-
-    mnbot_info_url: str
-
-@dataclasses.dataclass
-class Result:
-    final_url: str
-    outlinks: list
-    custom_js_result: typing.Optional[dict]
-    status_code: int
-    requisites: dict[str, Chain]
-
-    # Create a dict to write to the WARC
-    def dict(self) -> dict[str, typing.Any]:
-        return {
-            "final_url": self.final_url,
-            "outlinks": self.outlinks,
-            "custom_js_result": self.custom_js_result,
-            "requisites": [dataclasses.asdict(v) for v in self.requisites.values()]
-            # Don't include status code because that's already in the WARC
-        }
 
 def thumb_jpeg(full_jpeg):
     # This really should be a static method...
@@ -345,7 +278,7 @@ class Brozzler:
         r = Result(
             final_url = final_url,
             outlinks = list(outlinks),
-            custom_js_result = custom_js_result,
+            custom_js = custom_js_result,
             status_code = status_code,
             requisites = url_log
         )
@@ -361,7 +294,7 @@ class Brozzler:
 
         return r
 
-    def _run_job_target(self, job: Job) -> Result:
+    def run_job(self, job: Job) -> Result:
         logger.debug(f"spun up thread for job {job.full_job['id']}")
         browser = self.pool.acquire()
         try:
@@ -370,63 +303,28 @@ class Brozzler:
             browser.stop()
             self.pool.release(browser)
 
-    async def run_job(self, ws: "Websocket", full_job: dict, url: str, warc_prefix: str, stealth_ua: bool, custom_js: typing.Optional[str], info_url: str):
-        tries = full_job['_current_attempt']
-        id = full_job['id']
-        #dedup_bucket = f"dedup-{id}-{tries}"
-        dedup_bucket = ""
-        stats_bucket = f"stats-{id}-{tries}"
-        job = Job(
-            full_job = full_job,
-            url = url,
-            warc_prefix = warc_prefix,
-            dedup_bucket = dedup_bucket,
-            stats_bucket = stats_bucket,
-            stealth_ua = stealth_ua,
-            custom_js = custom_js,
-            cookie_jar = None,
-            mnbot_info_url = info_url
-        )
-        result = await asyncio.to_thread(
-            self._run_job_target,
-            job = job
-        )
-        await ws.store_result(id, "status_code", tries, result.status_code)
-        await ws.store_result(id, "outlinks", tries, result.outlinks)
-        await ws.store_result(id, "final_url", tries, result.final_url)
-        requisites = [dataclasses.asdict(v) for v in result.requisites.values()]
-        await ws.store_result(id, "requisites", tries, requisites)
-        if result.status_code >= 400:
-            raise RuntimeError(f"Bad status code {result.status_code}")
-        if not result.final_url.startswith("http"):
-            raise RuntimeError(f"Bad final_url {result.final_url}")
-        if jsr := result.custom_js_result:
-            await ws.store_result(id, "custom_js", tries, jsr)
-            if jsr['status'] != "success":
-                raise RuntimeError("Custom JS didn't succeed")
-        return dedup_bucket, stats_bucket
+if __name__ == "__main__":
+    with open(int(sys.argv[1]), "w") as control:
+        def write_message(type, payload):
+            control.write(json.dumps({"type": type, "payload": payload}) + "\n")
 
-async def warcprox_cleanup():
-    conn = None
-    try:
-        conn = await r.connect(host = "rethinkdb")
-        # We don't currently clean up the stats bucket as warcprox does it in batches, so when
-        # this function runs, warcprox is going to re-add it in a few seconds anyway.
-        logger.debug("deleting old dedup records")
-        res = await (
-            _dedup_db()
-            # Deletes records more than 7 days old, to prevent the database from blowing up
-            # and to make sure that corrupt records don't forever cause a URL to be lost
-            .between(r.minval, r.now() - 7*24*3600, index = "mnbot-date")
-            .delete(durability = "soft")
-            .run(conn)
-        )
-        logger.debug(f"queued {res['deleted']} old dedup records for deletion")
-    except Exception:
-        logger.exception(f"failed to clean up old records")
-    finally:
+        # todo: remove the pool entirely, just do one browser
+        pool = Brozzler(1)
+        job_data = json.loads(sys.stdin.readline())
+        job = Job(**job_data)
         try:
-            if conn:
-                await conn.close()
+            result = pool.run_job(job)
+            write_message("final_url", result.final_url)
+            write_message("outlinks", result.outlinks)
+            write_message("requisites", [dataclasses.asdict(v) for v in result.requisites.values()])
+            write_message("status_code", result.status_code)
+            if jsr := result.custom_js:
+                write_message("custom_js", result.custom_js)
+                if jsr['status'] != "success":
+                    raise RuntimeError("Custom JS didn't succeed")
+            if result.status_code >= 400:
+                raise RuntimeError(f"Bad HTTP status code {result.status_code}")
+            elif not result.final_url.startswith("http"):
+                raise RuntimeError(f"Bad final_url {result.final_url}")
         except Exception:
-            pass
+            write_message("error", "Caught exception!\n" + traceback.format_exc())

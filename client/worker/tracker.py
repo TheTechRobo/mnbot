@@ -6,7 +6,7 @@
 import asyncio, logging, json
 import typing
 
-from meta import VERSION
+from shared import VERSION
 
 logger = logging.getLogger("mnbot")
 del logging
