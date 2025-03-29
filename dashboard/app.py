@@ -1,4 +1,4 @@
-from quart import Quart, render_template, request
+from quart import Quart, abort, render_template, request
 import werkzeug.exceptions
 
 class EscapingQuart(Quart):
@@ -52,6 +52,16 @@ async def single_item(id):
     if request.accept_mimetypes.accept_html:
         return await render_template("item.j2", item = item, results = results)
     return {"status": 200, "item": item.as_json_friendly_dict(), "results": results}
+
+@app.route("/screenshot/<id>/<key>.jpg")
+async def screenshot(id, key):
+    if key not in ("full", "thumb"):
+        abort(400)
+    result = await QUEUE.get_result(id)
+    if not result:
+        abort(404)
+    print(result)
+    return result.data[key], {"Content-Type": "image/jpeg"}
 
 @app.errorhandler(werkzeug.exceptions.HTTPException)
 async def error(e: werkzeug.exceptions.HTTPException):

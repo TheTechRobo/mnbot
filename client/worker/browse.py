@@ -6,6 +6,7 @@
 ### update the version in meta.py.
 ### No two versions in prod should have the same version number.
 
+import base64
 import typing, urllib.request, json, shutil, sys, traceback
 
 from shared import DEBUG, VERSION, PROXY_URL, Job, Result
@@ -59,6 +60,8 @@ class Brozzler:
         # Inspired by Brozzler's implementation of this. Brozzler is also Apache2.0-licenced
         logger.debug("writing screenshot")
         thumbnail = thumb_jpeg(screenshot)
+        self.screenshot = screenshot
+        self.thumbnail = thumbnail
         self._write_warcprox_record(
             url = "screenshot:" + url,
             content_type = "image/jpeg",
@@ -318,6 +321,10 @@ if __name__ == "__main__":
             write_message("outlinks", result.outlinks)
             write_message("requisites", [dataclasses.asdict(v) for v in result.requisites.values()])
             write_message("status_code", result.status_code)
+            write_message("screenshot", {
+                "full": base64.b85encode(pool.screenshot).decode(),
+                "thumb": base64.b85encode(pool.thumbnail).decode()
+            })
             if jsr := result.custom_js:
                 write_message("custom_js", result.custom_js)
                 if jsr['status'] != "success":

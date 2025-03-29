@@ -171,8 +171,12 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ste
                         payload = res['payload']
                         if type in ("status_code", "outlinks", "final_url", "requisites", "custom_js"):
                             await ws.store_result(id, type, tries, payload)
+                        elif type == "screenshot":
+                            await ws.store_result(id, type, tries, payload, ("full", "thumb"))
                         elif type == "error":
                             raise ItemFailedException(f"Subprocess reported error: {payload}")
+                        else:
+                            logger.error(f"Unrecognized message: {res}")
                     else:
                         raise RuntimeError(f"invalid coro type! {coro}")
                 coros = pending

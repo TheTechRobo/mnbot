@@ -91,13 +91,16 @@ class Websocket:
         if status != 204:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
 
-    async def store_result(self, id: str, result_type: str, tries: int, result):
-        status, resp = await self._send("Item:store", {
+    async def store_result(self, id: str, result_type: str, tries: int, result, decode_fields = None):
+        pl = {
             "result_type": result_type,
             "attempt": tries,
             "result": result,
             "id": id
-        })
+        }
+        if decode_fields:
+            pl['decode_fields'] = decode_fields
+        status, resp = await self._send("Item:store", pl)
         if status != 201:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
 

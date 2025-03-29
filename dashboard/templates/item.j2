@@ -85,6 +85,12 @@
 										</li>
 									{% endfor %}
 								</ul>
+							{% elif result.type == "screenshot" %}
+								<a href="{{ url_for('screenshot', id = result.id, key = 'full') }}">
+									<img src="{{ url_for('screenshot', id = result.id, key = 'thumb') }}" />
+									<br />
+									<small>Click to enlarge</small>
+								</a>
 							{% elif result.type == "requisites" %}
 								<table>
 									<tr>

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import collections
 import os
 import json
@@ -76,10 +77,13 @@ async def fail(ctx: HandlerContext, *, id, message, attempt) -> Response:
     return 204, None
 
 @handler("Item:store")
-async def store(ctx: HandlerContext, *, id, result, attempt, result_type):
+async def store(ctx: HandlerContext, *, id, result, attempt, result_type, decode_fields = None):
     item = await QUEUE.get(id)
     if not item:
         raise Exception("item does not exist")
+    if decode_fields:
+        for field in decode_fields:
+            result[field] = base64.b85decode(result[field])
     new_item = await QUEUE.store_result(item, attempt, result, result_type)
     return 201, {"new_id": new_item}
 
