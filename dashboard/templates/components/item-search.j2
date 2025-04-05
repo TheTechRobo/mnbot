@@ -1,0 +1,47 @@
+<!-- Search box to instantly look up items. Binds the shortcut 'i'. -->
+<style>
+.error {
+	color: red;
+}
+</style>
+
+<script>
+function validateForm(event) {
+	let e = event.target;
+	e.value = e.value.trim();
+	let err = e.parentNode.parentNode.querySelector(".error");
+	let isValid = /^[0-9A-F]{8}-[0-9A-F]{4}-[4][0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i.test(e.value);
+	if (isValid) {
+		e.setAttribute("aria-invalid", "false");
+		err.setAttribute("hidden", "true");
+	} else {
+		e.setAttribute("aria-invalid", "true");
+		err.removeAttribute("hidden");
+	}
+}
+
+document.addEventListener("keyup", (event) => {
+	if (event.key.toLowerCase() == "i") {
+		document.getElementById("search-item").focus();
+	}
+});
+</script>
+
+<article id="search">
+	<h3><u>I</u>tem search</h2>
+	<form action="/item/translate" method="GET" id="search-form">
+		<fieldset role="group">
+			<input
+				name="item"
+				id="search-item"
+				aria-describedby="search-item-helper"
+				placeholder="Item identifier"
+				aria-label="Item identifier"
+				oninput="validateForm(event)"
+			/>
+			<input type="submit" value="Search" />
+		</fieldset>
+		<small id="search-item-helper">Searching by URL or domain is currently unimplemented.</small>
+		<small class="error" hidden id="search-item-usage">You must provide a valid job UUID.</small>
+	</form>
+</article>

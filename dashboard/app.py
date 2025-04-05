@@ -1,4 +1,4 @@
-from quart import Quart, abort, render_template, request
+from quart import Quart, abort, redirect, render_template, request, url_for
 import werkzeug.exceptions
 
 class EscapingQuart(Quart):
@@ -15,7 +15,7 @@ app.jinja_env.globals.update(isinstance = isinstance)
 NAV = (
     ("/", "Dashboard"),
     ("/queue", "Pending"),
-    ("/admin", "Admin")
+    ("/claims", "Claims"),
 )
 
 app.before_serving(QUEUE.check)
@@ -29,12 +29,28 @@ async def home():
     status = await QUEUE.counts()
     return await render_template("home.j2", status = status.counts)
 
+@app.route("/item/translate")
+async def translate_form_input():
+    if "item" not in request.args:
+        abort(400)
+    return redirect(url_for("single_item", id = request.args['item']), 301)
+
 @app.route("/queue")
 async def pending():
     pending = await QUEUE.pending()
     if request.accept_mimetypes.accept_html:
-        return await render_template("pending.j2", pending = pending)
+        return await render_template("pending.j2", pending = pending, adj = "Pending")
     return {"status": 200, "pending": [i.as_json_friendly_dict() for i in pending]}
+
+@app.route("/claims")
+async def claims():
+    claims = QUEUE.claimed()
+    if request.accept_mimetypes.accept_html:
+        return await render_template("pending.j2", pending = claims, adj = "Claimed")
+    claims = []
+    async for item in QUEUE.claimed():
+        claims.append(item)
+    return {"status": 200, "claims": claims}
 
 @app.route("/item/<id>")
 async def single_item(id):
@@ -60,7 +76,6 @@ async def screenshot(id, key):
     result = await QUEUE.get_result(id)
     if not result:
         abort(404)
-    print(result)
     return result.data[key], {"Content-Type": "image/jpeg"}
 
 @app.errorhandler(werkzeug.exceptions.HTTPException)

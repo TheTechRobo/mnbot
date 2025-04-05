@@ -2,6 +2,10 @@
 	color: grey;
 }
 
+/* :root {
+	scroll-behavior: smooth;
+} */
+
 body {
 	padding-left: 10%;
 	padding-right: 10%;

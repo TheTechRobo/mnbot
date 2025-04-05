@@ -6,17 +6,23 @@
 
 <section id="queues">
 	<h2>Queues</h2>
-	<p>See <a href="/queue">Pending</a> for queued items.</p>
-	{% for pipeline, queues in status.items() %}
-		<p>Pipeline {{ pipeline }}:</p>
-		<ul>
-			{% for queue, value in queues.items() %}
-				<li>
-					<b>{{ value }}</b> {{ queue }} items.</b>
-				</li>
-			{% endfor %}
-		</ul>
-	{% endfor %}
+	<p>See <a href="/queue">Pending</a> for queued items, or <a href="/claims">Claims</a> for in-progress items.</p>
+	{% if status %}
+		{% for pipeline, queues in status.items() %}
+			<p>Pipeline {{ pipeline }}:</p>
+			<ul>
+				{% for queue, value in queues.items() %}
+					<li>
+						<b>{{ value }}</b> {{ queue }} items.</b>
+					</li>
+				{% endfor %}
+			</ul>
+		{% endfor %}
+	{% else %}
+		<p>There aren't any queued, running, or stashed items.</p>
+	{% endif %}
 </section>
+
+{% include "components/item-search.j2" %}
 
 {% endblock %}

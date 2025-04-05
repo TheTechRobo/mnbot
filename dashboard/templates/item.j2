@@ -6,8 +6,8 @@
 
 <h2>Item {{ item.id }}</h2>
 
-<section id="item">
-	<h3>Item data</h3>
+<section id="item" tabindex="-1">
+	<h3>Item <u>d</u>ata</h3>
 	<ul>
 		<li><b>Item URL: </b><a href="{{ item.item }}">{{ item.item }}</a></li>
 		<li><b>Item status: </b>
@@ -63,8 +63,8 @@
 	</ul>
 </section>
 
-<section id="results">
-	<h3>Results</h3>
+<section id="results" tabindex="-1">
+	<h3><u>R</u>esults</h3>
 	{% if results %}
 		<ul>
 			{% for try, try_results in results.items() %}
@@ -75,77 +75,81 @@
 					<li>
 						<details>
 							<summary><code>{{ result.type }}</code> (click to show)</summary>
-							{% if result.type == "outlinks" %}
-								<ul>
-									{% for outlink in result.data %}
-										<li>
-											<a href="{{ outlink }}">
-												<code>{{ outlink }}</code>
-											</a>
-										</li>
-									{% endfor %}
-								</ul>
-							{% elif result.type == "screenshot" %}
-								<a href="{{ url_for('screenshot', id = result.id, key = 'full') }}">
-									<img src="{{ url_for('screenshot', id = result.id, key = 'thumb') }}" />
-									<br />
-									<small>Click to enlarge</small>
-								</a>
-							{% elif result.type == "requisites" %}
-								<table>
-									<tr>
-										<th>Status</th>
-										<th>Type</th>
-										<th>Category</th>
-										<th>Length</th>
-										<th>Method</th>
-										<th>URL</th>
-									</tr>
-									{% for requisite in result.data %}
-										{% for pair in requisite['chain'] %}
-											<tr>
-												{% if pair.response._type == "Response" %}
-													<td>{{ pair.response.status[0] }} {{ pair.response.status[1] }}</td>
-													<td>{{ pair.response.mimetype or "-" }}</td>
-												{% elif pair.response._type == "Error" %}
-													<td>Error</td>
-													<td>{{ pair.response.text }}</td>
-												{% elif pair.response is none %}
-													<td>None</td>
-													<td>No response</td>
-												{% else %}
-													<td>Unknown - this is a bug</td>
-													<td></td>
-												{% endif %}
-												{% if loop.first %}
-													<td>{{ pair.request.category }}</td>
-												{% else %}
-													<td>Redirect &uarr;</td>
-												{% endif %}
-												{% if pair.response.length is none %}
-													<td>?</td>
-												{% elif pair.response.length is not defined %}
-													<td>n/a</td>
-												{% else %}
-													<td>{{ pair.response.length }}</td>
-												{% endif %}
-												<td>{{ pair.request.method }}</td>
-												<td>
-													<a href="{{ pair.request.url }}">
-														{{ pair.request.url }}
-													</a>
-												</td>
-											</tr>
+							<div class="overflow-auto">
+								{% if result.type == "outlinks" %}
+									<ul>
+										{% for outlink in result.data %}
+											<li>
+												<a href="{{ outlink }}">
+													<code>{{ outlink }}</code>
+												</a>
+											</li>
 										{% endfor %}
-									{% endfor %}
-								</table>
-							{% else %}
-								<code>
-									{{ result.data }}
-								</code>
-							{% endif %}
+									</ul>
+								{% elif result.type == "screenshot" %}
+									<a href="{{ url_for('screenshot', id = result.id, key = 'full') }}">
+										<img src="{{ url_for('screenshot', id = result.id, key = 'thumb') }}" />
+										<br />
+										<small>Click to enlarge</small>
+									</a>
+								{% elif result.type == "requisites" %}
+									<table class="striped">
+										<tr>
+											<th>Status</th>
+											<th>Type</th>
+											<th>Category</th>
+											<th>Length</th>
+											<th>Method</th>
+											<th>URL</th>
+										</tr>
+										{% for requisite in result.data %}
+											{% for pair in requisite['chain'] %}
+												<tr>
+													{% if pair.response._type == "Response" %}
+														<td>{{ pair.response.status[0] }} {{ pair.response.status[1] }}</td>
+														<td>{{ pair.response.mimetype or "-" }}</td>
+													{% elif pair.response._type == "Error" %}
+														<td>Error</td>
+														<td>{{ pair.response.text }}</td>
+													{% elif pair.response is none %}
+														<td>None</td>
+														<td>No response</td>
+													{% else %}
+														<td>Unknown - this is a bug</td>
+														<td></td>
+													{% endif %}
+													{% if loop.first %}
+														<td>{{ pair.request.category }}</td>
+													{% else %}
+														<td>Redirect &uarr;</td>
+													{% endif %}
+													{% if pair.response.length is none %}
+														<td>?</td>
+													{% elif pair.response.length is not defined %}
+														<td>n/a</td>
+													{% else %}
+														<td>{{ pair.response.length }}</td>
+													{% endif %}
+													<td>{{ pair.request.method }}</td>
+													<td>
+														<a href="{{ pair.request.url }}">
+															{{ pair.request.url }}
+														</a>
+													</td>
+												</tr>
+											{% endfor %}
+										{% endfor %}
+									</table>
+								{% else %}
+									<code>
+										{{ result.data }}
+									</code>
+								{% endif %}
+							</div>
 						</details>
 					</li>
+				{% else %}
+					<p>No results exist yet for this attempt. It may still be running.</p>
 				{% endfor %}
 				{% if item.attempts[try].error %}
 					<li>
@@ -170,10 +174,31 @@
 	{% endif %}
 </section>
 
-<section id="upload">
-	<h3>Uploads</h3>
+<section id="upload" tabindex="-1">
+	<h3><u>U</u>ploads</h3>
 	<!-- <p>Item {{ item.id }} has not yet been uploaded to IA. Uploading may take up to a day. If it is still not uploaded after that, please contact an admin.</p> -->
 	<p>Upload indexing is currently not implemented.</p>
 </section>
+
+<script>
+document.addEventListener("keyup", (event) => {
+	switch(event.key.toLowerCase()) {
+		case "d":
+			document.getElementById("item").focus();
+			document.getElementById("item").scrollIntoView();
+			break;
+		case "r":
+			document.getElementById("results").focus();
+			document.getElementById("results").scrollIntoView();
+			break;
+		case "u":
+			document.getElementById("upload").focus();
+			document.getElementById("upload").scrollIntoView();
+			break;
+	}
+});
+</script>
+
+{% include "components/item-search.j2" %}
 
 {% endblock %}
