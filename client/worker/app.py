@@ -137,6 +137,8 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ste
 
     with concurrent.futures.ThreadPoolExecutor(1) as pool:
         async with aiofiles.open(pread, "r", executor = pool) as pread:
+            # This won't deadlock because we know that browse.py will
+            # read stdin before writing anything.
             stdout = process.stdout
             stdin = process.stdin
             assert stdin and stdout
@@ -164,7 +166,7 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ste
                             print(f"stdout[{id}]: {res}", flush = True)
                         pending.add(asyncio.create_task(stdout.readline(), name = "stdout"))
                     elif coro.get_name() == "pread":
-                        logger.debug(f"pread received: {res}")
+                        logger.debug("pread received: %s", res)
                         pending.add(asyncio.create_task(pread.readline(), name = "pread"))
                         res = json.loads(res)
                         type = res['type']

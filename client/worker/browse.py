@@ -29,9 +29,12 @@ def thumb_jpeg(full_jpeg):
 
 class Brozzler:
     def __init__(self, browsers: int):
+        self.chrome_exe = shutil.which("chromium")
+        if not self.chrome_exe:
+            raise RuntimeError("Could not find a Chromium executable!")
         self.pool = brozzler.BrowserPool(
             browsers,
-            chrome_exe = shutil.which("chromium"),
+            chrome_exe = self.chrome_exe,
             ignore_cert_errors = True
         )
 
@@ -94,9 +97,9 @@ class Brozzler:
         message = browser.websock_thread.pop_result(msg_id)
         m = repr(message)
         if len(m) < 1024:
-            logger.debug(f"received response: {message}")
+            logger.debug("received response: %s", message)
         else:
-            logger.debug(f"received response (too long for logs)")
+            logger.debug("received response (too long for logs)")
         return message
 
     def _proxy_url(self, url: str, headers: dict):
@@ -187,13 +190,26 @@ class Brozzler:
             ua += f" (mnbot {VERSION}; +{job.mnbot_info_url})"
         logger.debug(f"using updated user agent {ua}")
 
+        logger.debug("getting browser version")
+        version = self._run_cdp_command(
+            browser,
+            "Browser.getVersion"
+        )['result']
+        version['defaultUserAgent'] = version['userAgent']
+        del version['userAgent']
+        logger.debug("got browser version %s", version)
+
         logger.debug("writing item info")
         self._write_warcprox_record(
             "metadata:mnbot-job-metadata",
             "application/json",
             json.dumps({
                 "job": job.full_job,
-                "version": VERSION
+                "version": VERSION,
+                "browser": {
+                    "executable": self.chrome_exe,
+                    "version": version
+                }
             }).encode(),
             job.warc_prefix
         )
