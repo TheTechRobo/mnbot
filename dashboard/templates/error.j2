@@ -8,4 +8,8 @@
 <p>{{ description }}</p>
 <p>If you believe this error to be in error, please let us know!</p>
 
+{% if show_item_search %}
+{% include "components/item-search.j2" %}
+{% endif %}
+
 {% endblock %}

@@ -6,8 +6,8 @@
 
 <h2>Item {{ item.id }}</h2>
 
-<section id="item" tabindex="-1">
-	<h3>Item <u>d</u>ata</h3>
+<section aria-keyshortcuts="d" id="item" tabindex="-1">
+	<h3>Item <span class="shortcut">d</span>ata</h3>
 	<ul>
 		<li><b>Item URL: </b><a href="{{ item.item }}">{{ item.item }}</a></li>
 		<li><b>Item status: </b>
@@ -31,7 +31,7 @@
 			<li><b>Custom JavaScript: </b>None</li>
 		{% endif %}
 		<li><b>Pipeline type: </b>{{ item.pipeline_type }}</li>
-		<li><b>Priority: </b>{{ item.priority }} (effective {{ item.priority + item.attempt_count() }})</li>
+		<li><b data-tooltip="Lower priorities are run first.">Priority: </b>{{ item.priority }} (effective {{ item.priority + item.attempt_count() }})</li>
 		<li><b>Queued at: </b>{{ item.queued_at.replace(microsecond=0) }}</li>
 		{% if item.claimed_at %}
 			<li><b>Last claimed at: </b>{{ item.claimed_at.replace(microsecond=0) }}</li>
@@ -63,14 +63,14 @@
 	</ul>
 </section>
 
-<section id="results" tabindex="-1">
-	<h3><u>R</u>esults</h3>
+<section id="results" aria-keyshortcuts="r" tabindex="-1">
+	<h3><span class="shortcut">R</span>esults</h3>
 	{% if results %}
-		<ul>
-			{% for try, try_results in results.items() %}
-				<b>
-					Attempt {{ try + 1 }} (on pipeline {{ item.attempts[try].pipeline }} {{ item.attempts[try].pipeline_version or "" }})
-				</b>
+		{% for try, try_results in results.items() %}
+			<p>
+				<b>Attempt {{ try + 1 }} (on pipeline {{ item.attempts[try].pipeline }} {{ item.attempts[try].pipeline_version or "" }})</b>
+			</p>
+			<ul>
 				{% for result in try_results %}
 					<li>
 						<details>
@@ -88,9 +88,9 @@
 									</ul>
 								{% elif result.type == "screenshot" %}
 									<a href="{{ url_for('screenshot', id = result.id, key = 'full') }}">
-										<img src="{{ url_for('screenshot', id = result.id, key = 'thumb') }}" />
+										<img src="{{ url_for('screenshot', id = result.id, key = 'thumb') }}" alt="Page screenshot" />
 										<br />
-										<small>Click to enlarge</small>
+										<small>Click to enlarge image</small>
 									</a>
 								{% elif result.type == "requisites" %}
 									<table class="striped">
@@ -167,36 +167,23 @@
 						</details>
 					</li>
 				{% endif %}
-			{% endfor %}
-		</ul>
+			</ul>
+		{% endfor %}
 	{% else %}
 		<p>This item has not been tried yet.</p>
 	{% endif %}
 </section>
 
-<section id="upload" tabindex="-1">
-	<h3><u>U</u>ploads</h3>
+<section id="upload" aria-keyshortcuts="u" tabindex="-1">
+	<h3><span class="shortcut">U</span>ploads</h3>
 	<!-- <p>Item {{ item.id }} has not yet been uploaded to IA. Uploading may take up to a day. If it is still not uploaded after that, please contact an admin.</p> -->
 	<p>Upload indexing is currently not implemented.</p>
 </section>
 
 <script>
-document.addEventListener("keyup", (event) => {
-	switch(event.key.toLowerCase()) {
-		case "d":
-			document.getElementById("item").focus();
-			document.getElementById("item").scrollIntoView();
-			break;
-		case "r":
-			document.getElementById("results").focus();
-			document.getElementById("results").scrollIntoView();
-			break;
-		case "u":
-			document.getElementById("upload").focus();
-			document.getElementById("upload").scrollIntoView();
-			break;
-	}
-});
+SHORTCUTS.d = "item";
+SHORTCUTS.r = "results";
+SHORTCUTS.u = "upload";
 </script>
 
 {% include "components/item-search.j2" %}

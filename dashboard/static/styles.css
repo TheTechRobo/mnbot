@@ -2,10 +2,6 @@
 	color: grey;
 }
 
-/* :root {
-	scroll-behavior: smooth;
-} */
-
 body {
 	padding-left: 10%;
 	padding-right: 10%;
@@ -20,11 +16,35 @@ nav {
 	justify-content: flex-end;
 }
 
+hgroup a {
+	text-decoration: none;
+}
+
+nav .current {
+	color: grey;
+}
+
 a code {
 	text-decoration: underline;
 }
 
 th {
 	font-weight: bold;
+}
+
+.error {
+	color: red;
+}
+
+section {
+	scroll-margin: 2px;
+}
+
+section:focus-visible > :first-child {
+	outline: 1px solid white;
+}
+
+.shortcut {
+	text-decoration: underline;
 }
 

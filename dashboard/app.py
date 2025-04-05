@@ -57,7 +57,7 @@ async def single_item(id):
     item = await QUEUE.get(id)
     if not item:
         if request.accept_mimetypes.accept_html:
-            return await render_template("error.j2", reason = "Item not found", description = f"Item {id} was not found."), 404
+            return await render_template("error.j2", reason = "Item not found", description = f"Item {id} was not found.", show_item_search = True), 404
         return {"status": 404, "message": "Item not found."}, 404
     results = {}
     for attempt in range(len(item.attempts)):

@@ -1,24 +1,47 @@
 <!DOCTYPE html>
-
-<html>
+<html lang="en">
 	<head>
 		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
 		<link rel="stylesheet" href="/static/styles.css" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title> {% block title %} why do they call it oven when you of in the cold food of out hot eat the food {% endblock %} | mnbot</title>
+		<script>
+			// Mapping of key name to either element to focus or function to run
+			const SHORTCUTS = {};
+			// Try to prevent the browser from handling keys
+			document.addEventListener("keydown", (event) => {
+				const key = event.key.toLowerCase();
+				if (Object.hasOwn(SHORTCUTS, key)) {
+					return false;
+				}
+				// Handle on keyup
+			});
+			document.addEventListener("keyup", (event) => {
+				const key = event.key.toLowerCase();
+				if (Object.hasOwn(SHORTCUTS, key)) {
+					const handler = SHORTCUTS[key];
+					if (typeof handler === "string") {
+						document.getElementById(handler).focus();
+						document.getElementById(handler).scrollIntoView();
+					} else {
+						SHORTCUTS[key](event);
+					}
+				}
+			});
+		</script>
 	</head>
 	<body>
 		<header>
 			<hgroup>
-				<h1><a class="contrast" style="text-decoration: none" href="/">mnbot</a></h1>
-				<h3>Eating javascripts since 2025</h3>
+				<h1><a tabindex="-1" class="contrast" href="/">mnbot</a></h1>
+				<p>Eating javascripts since 2025</p>
 			</hgroup>
 			<nav>
 				<ul>
 					{% for path, name in nav %}
 						<li>
 							{% if request.path == path %}
-								<span style="color: grey;"> {{ name }} </span>
+								<span class="current"> {{ name }} </span>
 							{% else %}
 								<a href="{{ path }}"> {{ name }}</a>
 							{% endif %}
@@ -29,10 +52,24 @@
 		</header>
 		<main>
 			{% block content %}
-				<h2>Someone fucked up the template...</h2>
+				<h2>Congrats! You broke the template!</h2>
 				<p>Go yell at whatever dev did this.</p>
 				<p>(If you are said dev, make sure you define the title and content blocks.)</p>
 			{% endblock %}
 		</main>
+		<script>
+			// This selector selects every textual input tag
+			// Source: https://stackoverflow.com/a/1533485/9654083
+			const sel = "input:not([type]), input[type='text'], input[type='password']";
+			// Prevent keyboard shortcuts from triggering while inside a text box
+			// unless Alt is being pushed. This allows the user to type in peace.
+			document.querySelectorAll(sel).forEach((el) => {
+				el.addEventListener("keyup", (ev) => {
+					if (!ev.altKey) {
+						ev.stopPropagation();
+					}
+				});
+			});
+		</script>
 	</body>
 </html>
