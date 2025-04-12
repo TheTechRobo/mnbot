@@ -7,7 +7,7 @@ logging.basicConfig(format = "%(asctime)s %(levelname)s <:%(thread)s> : %(messag
 # Update this whenever you make a change, cosmetic or not.
 # During development you can ignore it, but when you actually
 # push it to prod, it *must* be updated.
-VERSION = "20250404.02"
+VERSION = "20250412.01"
 
 DEBUG = os.environ.get("DEBUG") == "1"
 if DEBUG:
@@ -64,3 +64,19 @@ class Result:
             value = Chain(**value)
             rv.requisites[key] = value
         return rv
+
+class MnError(RuntimeError):
+    fatal: bool
+
+    def __init__(self, message: str):
+        self.fatal = False
+        self.message = message
+
+class BadStatusCode(MnError):
+    FATAL_STATUS_CODES = (401, 403, 404, 405, 410, 451)
+    """These status codes will prevent mnbot from retrying automatically."""
+
+    def __init__(self, code: int):
+        super().__init__(f"Bad status code {code}")
+        self.code = code
+        self.fatal = code in self.FATAL_STATUS_CODES

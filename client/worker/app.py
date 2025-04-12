@@ -46,8 +46,9 @@ class ItemFailedException(Exception):
     """
     Raised to provide a custom failure message for the item.
     """
-    def __init__(self, msg):
+    def __init__(self, msg: str, fatal: bool):
         self.msg = msg
+        self.fatal = fatal
 
 # Wait for warcprox to start
 while True:
@@ -166,7 +167,6 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ste
                             print(f"stdout[{id}]: {res}", flush = True)
                         pending.add(asyncio.create_task(stdout.readline(), name = "stdout"))
                     elif coro.get_name() == "pread":
-                        logger.debug("pread received: %s", res)
                         pending.add(asyncio.create_task(pread.readline(), name = "pread"))
                         res = json.loads(res)
                         type = res['type']
@@ -176,9 +176,11 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ste
                         elif type == "screenshot":
                             await ws.store_result(id, type, tries, payload, ("full", "thumb"))
                         elif type == "error":
-                            raise ItemFailedException(f"Subprocess reported error: {payload}")
+                            raise ItemFailedException(f"Subprocess reported error: {payload}", False)
+                        elif type == "fatal":
+                            raise ItemFailedException(f"Subprocess reported error: {payload}", True)
                         else:
-                            logger.error(f"Unrecognized message: {res}")
+                            logger.error(f"unrecognized message: {res}")
                     else:
                         raise RuntimeError(f"invalid coro type! {coro}")
                 coros = pending
@@ -284,12 +286,13 @@ async def main():
             except Exception as e:
                 if isinstance(e, ItemFailedException):
                     message = e.msg
+                    fatal = e.fatal
                 else:
                     logger.exception(f"failed task {id}:")
                     fmt = io.StringIO()
                     finished_task.print_stack(file = fmt)
                     message = f"Caught exception!\n{fmt.getvalue()}"
-                await ws.fail_item(id, message, tries)
+                await ws.fail_item(id, message, tries, fatal)
             else:
                 logger.debug("task was successful!")
                 await ws.finish_item(id)

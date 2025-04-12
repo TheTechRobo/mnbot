@@ -81,8 +81,16 @@ class Websocket:
             return resp['item'], resp['info_url']
         return None
 
-    async def fail_item(self, id: str, reason: str, tries: int):
-        status, resp = await self._send("Item:fail", {"id": id, "message": reason, "attempt": tries})
+    async def fail_item(self, id: str, reason: str, tries: int, fatal: bool):
+        status, resp = await self._send(
+            "Item:fail",
+            {
+                "id": id,
+                "message": reason,
+                "attempt": tries,
+                "fatal": fatal
+            }
+        )
         if status != 204:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
 

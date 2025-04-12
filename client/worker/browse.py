@@ -9,7 +9,7 @@
 import base64
 import typing, urllib.request, json, shutil, sys, traceback
 
-from shared import DEBUG, VERSION, PROXY_URL, Job, Result
+from shared import DEBUG, VERSION, PROXY_URL, BadStatusCode, Job, MnError, Result
 from result import *
 
 import logging
@@ -344,10 +344,12 @@ if __name__ == "__main__":
             if jsr := result.custom_js:
                 write_message("custom_js", result.custom_js)
                 if jsr['status'] != "success":
-                    raise RuntimeError("Custom JS didn't succeed")
+                    raise MnError("Custom JS didn't succeed")
             if result.status_code >= 400:
-                raise RuntimeError(f"Bad HTTP status code {result.status_code}")
+                raise BadStatusCode(result.status_code)
             elif not result.final_url.startswith("http"):
-                raise RuntimeError(f"Bad final_url {result.final_url}")
-        except Exception:
+                raise MnError(f"Bad final_url {result.final_url}")
+        except Exception as e:
+            if isinstance(e, MnError) and e.fatal:
+                write_message("fatal", "Caught exception!\n" + traceback.format_exc())
             write_message("error", "Caught exception!\n" + traceback.format_exc())
