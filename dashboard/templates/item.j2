@@ -24,6 +24,8 @@
 			{% if item.metadata.ua == "default" %} <span data-tooltip="Pretends to be Chrome on Windows, and adds information about mnbot.">Default</span>
 			{% elif item.metadata.ua == "stealth" %} <span data-tooltip="Pretends to be Chrome on Windows, without mnbot.">Stealth</span>
 			{% elif item.metadata.ua == "minimal" %} <span data-tooltip="Includes only information about mnbot.">Minimal</span>
+			{% elif item.metadata.ua == "googlebot" %} <span data-tooltip="Pretends to be Googlebot Desktop.">Googlebot Desktop</span>
+			{% elif item.metadata.ua.startswith("$") %} <code>{{ item.metadata.ua[1:] }}</code>
 			{% endif %}
 		</li>
 		{% if item.metadata['custom_js'] %}

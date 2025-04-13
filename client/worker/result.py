@@ -1,6 +1,12 @@
 import dataclasses
 import typing
 
+############################# NOTE! ###############################
+### If you are making any change to the client, please          ###
+### update the version in shared.py.                            ###
+### No two versions in prod should have the same version number.###
+############################ THANKS! ##############################
+
 @dataclasses.dataclass
 class Request:
     category: str | None

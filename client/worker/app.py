@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 
-### HEY YOU! Yeah, you!
-### If you are making any change to the client, please
-### update the version in meta.py.
-### No two versions in prod should have the same version number.
+############################# NOTE! ###############################
+### If you are making any change to the client, please          ###
+### update the version in shared.py.                            ###
+### No two versions in prod should have the same version number.###
+############################ THANKS! ##############################
 
 import asyncio
 import concurrent.futures

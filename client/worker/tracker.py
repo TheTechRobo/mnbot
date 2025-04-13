@@ -3,6 +3,12 @@
 ### update the version in meta.py.
 ### No two versions in prod should have the same version number.
 
+############################# NOTE! ###############################
+### If you are making any change to the client, please          ###
+### update the version in shared.py.                            ###
+### No two versions in prod should have the same version number.###
+############################ THANKS! ##############################
+
 import asyncio, logging, json
 import typing
 
@@ -31,7 +37,7 @@ class Websocket:
             self.seq += 1
             seq = self.seq
             message = {"type": type, "request": payload, "seq": seq}
-            logger.debug(f"sending message {message}")
+            logger.debug(f"sending message (keys: {list(message.keys())})")
             await self.conn.send(json.dumps(message))
             while True:
                 resp = json.loads(await self.conn.recv())

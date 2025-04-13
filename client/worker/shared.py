@@ -7,7 +7,7 @@ logging.basicConfig(format = "%(asctime)s %(levelname)s <:%(thread)s> : %(messag
 # Update this whenever you make a change, cosmetic or not.
 # During development you can ignore it, but when you actually
 # push it to prod, it *must* be updated.
-VERSION = "20250413.01"
+VERSION = "20250413.02"
 
 DEBUG = os.environ.get("DEBUG") == "1"
 if DEBUG:
@@ -80,3 +80,6 @@ class BadStatusCode(MnError):
         super().__init__(f"Bad status code {code}")
         self.code = code
         self.fatal = code in self.FATAL_STATUS_CODES
+
+class Timeout(MnError):
+    pass

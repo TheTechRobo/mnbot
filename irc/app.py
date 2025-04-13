@@ -25,7 +25,23 @@ print("setup complete")
 
 AIOHTTP_SESSION = None
 
-@bot.add_argument("--user-agent", "-u", choices = ("default", "stealth", "minimal"), default = "default")
+PRESET_USER_AGENTS = {
+    "curl": "curl/7.88.1",
+    "archivebot": (
+        "ArchiveTeam ArchiveBot/20240923.203d40a (wpull 2.0.3) and not Mozilla/5.0 "
+        "(Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/42.0.2311.90 Safari/537.36"
+    ),
+    "googlebot1": (
+        "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+    ),
+}
+
+@bot.add_argument(
+    "--user-agent", "-u",
+    choices = ("default", "stealth", "curl", "archivebot", "minimal", "googlebot1", "googlebot"),
+    default = "default"
+)
 @bot.add_argument("--explanation", "--explain", "-e")
 @bot.add_argument("--custom-js")
 @bot.add_argument("url")
@@ -56,12 +72,17 @@ async def brozzle(self: Bot, user: User, ran, args):
     if result is not True:
         yield "Failed to validate your URL. Cowardly bailing out."
         return
+    ua = PRESET_USER_AGENTS.get(args.user_agent, args.user_agent)
+    if ua := PRESET_USER_AGENTS.get(args.user_agent):
+        ua = "$" + ua
+    else:
+        ua = args.user_agent
     ent = await QUEUE.new(
         args.url,
         "brozzler",
         user.nick,
         explanation = args.explanation,
-        metadata = {"ua": args.user_agent, "custom_js": custom_js},
+        metadata = {"ua": ua, "custom_js": custom_js},
     )
     yield f"Queued {args.url} for Brozzler-based archival. You will be notified when it finishes. Use !status {ent.id} or check {item_url(ent.id)} for details."
 
