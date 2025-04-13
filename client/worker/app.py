@@ -104,7 +104,7 @@ async def warcprox_cleanup():
         except Exception:
             pass
 
-async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, stealth_ua: bool, custom_js: typing.Optional[str], info_url: str):
+async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ua: str, custom_js: typing.Optional[str], info_url: str):
     tries = full_job['_current_attempt']
     id = full_job['id']
     #dedup_bucket = f"dedup-{id}-{tries}"
@@ -116,7 +116,7 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ste
         warc_prefix = warc_prefix,
         dedup_bucket = dedup_bucket,
         stats_bucket = stats_bucket,
-        stealth_ua = stealth_ua,
+        ua = ua,
         custom_js = custom_js,
         cookie_jar = None,
         mnbot_info_url = info_url
@@ -259,7 +259,7 @@ async def main():
                     item,
                     url,
                     prefix,
-                    item['metadata']['stealth_ua'],
+                    item['metadata']['ua'],
                     item['metadata']['custom_js'],
                     info_url
                 ))

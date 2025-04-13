@@ -174,21 +174,28 @@ class Brozzler:
                     url_log[request_id].chain[-1].response = error
         browser.websock_thread._handle_message = message_handler
 
-        logger.debug("getting user agent")
-        ua = self._run_cdp_command(
-            browser,
-            "Runtime.evaluate",
-            {"expression": "navigator.userAgent", "returnByValue": True}
-        )['result']['result']['value']
-        logger.debug(f"got user agent {ua}")
-        # pretend we're not headless
-        ua = ua.replace("HeadlessChrome", "Chrome")
-        # pretend to be Windows, as brozzler's stealth JS does (otherwise it's inconsistent)
-        ua = ua.replace("(X11; Linux x86_64)", "(Windows NT 10.0; Win64; x64)")
-        if not job.stealth_ua:
-            # add mnbot link
-            ua += f" (mnbot {VERSION}; +{job.mnbot_info_url})"
-        logger.debug(f"using updated user agent {ua}")
+        match job.ua:
+            case "default" | "stealth":
+                logger.debug("getting user agent")
+                ua = self._run_cdp_command(
+                    browser,
+                    "Runtime.evaluate",
+                    {"expression": "navigator.userAgent", "returnByValue": True}
+                )['result']['result']['value']
+                logger.debug(f"got user agent {ua}")
+                # pretend we're not headless
+                ua = ua.replace("HeadlessChrome", "Chrome")
+                # pretend to be Windows, as brozzler's stealth JS does (otherwise it's inconsistent)
+                ua = ua.replace("(X11; Linux x86_64)", "(Windows NT 10.0; Win64; x64)")
+                if job.ua != "stealth":
+                    # add mnbot link
+                    ua += f" (mnbot {VERSION}; +{job.mnbot_info_url})"
+                logger.info(f"using updated user agent {ua}")
+            case "minimal":
+                ua = f"mnbot {VERSION} (+{job.mnbot_info_url})"
+                logger.info(f"using minimal user agent {ua}")
+            case _:
+                raise RuntimeError("Server gave us an invalid user agent. Is the pipeline out of date?")
 
         logger.debug("getting browser version")
         version = self._run_cdp_command(

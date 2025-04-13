@@ -25,7 +25,7 @@ print("setup complete")
 
 AIOHTTP_SESSION = None
 
-@bot.add_argument("--stealth-ua", action = "store_true")
+@bot.add_argument("--user-agent", "-u", choices = ("default", "stealth", "minimal"), default = "default")
 @bot.add_argument("--explanation", "--explain", "-e")
 @bot.add_argument("--custom-js")
 @bot.add_argument("url")
@@ -61,7 +61,7 @@ async def brozzle(self: Bot, user: User, ran, args):
         "brozzler",
         user.nick,
         explanation = args.explanation,
-        metadata = {"stealth_ua": args.stealth_ua, "custom_js": custom_js},
+        metadata = {"ua": args.user_agent, "custom_js": custom_js},
     )
     yield f"Queued {args.url} for Brozzler-based archival. You will be notified when it finishes. Use !status {ent.id} or check {item_url(ent.id)} for details."
 

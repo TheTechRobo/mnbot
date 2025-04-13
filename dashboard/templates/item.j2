@@ -19,7 +19,13 @@
 			{% endif %}
 		</li>
 		<li><b>Queued by: </b>{{ item.queued_by }}</li>
-		<li><b>User agent: </b>Chrome on Windows {% if not item.metadata['stealth_ua'] %} (with link to mnbot) {% endif %}</li>
+		<li>
+			<b>User agent: </b>
+			{% if item.metadata.ua == "default" %} <span data-tooltip="Pretends to be Chrome on Windows, and adds information about mnbot.">Default</span>
+			{% elif item.metadata.ua == "stealth" %} <span data-tooltip="Pretends to be Chrome on Windows, without mnbot.">Stealth</span>
+			{% elif item.metadata.ua == "minimal" %} <span data-tooltip="Includes only information about mnbot.">Minimal</span>
+			{% endif %}
+		</li>
 		{% if item.metadata['custom_js'] %}
 			<li>
 				<details style="display: block; margin:0">
