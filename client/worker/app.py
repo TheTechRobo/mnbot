@@ -177,8 +177,19 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ua:
                         elif type == "screenshot":
                             await ws.store_result(id, type, tries, payload, ("full", "thumb"))
                         elif type == "error":
+                            # Cancel tasks, since both stdout and pread are about to get closed.
+                            # Failing to do this results in a "Task exception was never retrieved"
+                            # as pread has been closed but the coroutine hasn't been run yet.
+                            # Normally, pread.readline can't be cancelled, since it's in a
+                            # thread pool, but it hasn't had a chance to start yet.
+                            for task in pending:
+                                task.cancel()
+                            pending.clear()
                             raise ItemFailedException(f"Subprocess reported error: {payload}", False)
                         elif type == "fatal":
+                            for task in pending:
+                                task.cancel()
+                            pending.clear()
                             raise ItemFailedException(f"Subprocess reported error: {payload}", True)
                         else:
                             logger.error(f"unrecognized message: {res}")
@@ -289,6 +300,7 @@ async def main():
                     message = e.msg
                     fatal = e.fatal
                 else:
+                    fatal = False
                     logger.exception(f"failed task {id}:")
                     fmt = io.StringIO()
                     finished_task.print_stack(file = fmt)
