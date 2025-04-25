@@ -358,7 +358,7 @@ class Brozzler:
             # We do these two things ourselves so they happen after custom_js
             skip_extract_outlinks = True,
             skip_visit_hashtags = True,
-            on_screenshot = self._on_screenshot,
+            on_screenshot = None,
             on_service_worker_version_updated = self._on_service_worker_version_updated,
             stealth = True,
             extra_headers = self.extra_headers,
@@ -371,6 +371,14 @@ class Brozzler:
             self._wait_for_idle(idle_time = 3, timeout = 10)
         except Timeout:
             logger.info("timed out waiting for idle; ignoring issue")
+
+        if status_code < 400:
+            # Only take screenshot when status code is not an error
+            # This prevents broken captures from having screenshots taken,
+            # and prevents warcprox's error pages from getting in there as well.
+            logger.info("taking screenshot")
+            self.browser._try_screenshot(self._on_screenshot, full_page = True)
+            logger.debug("took screenshot!")
 
         custom_js_result = None
         if self.job.custom_js:
@@ -433,10 +441,12 @@ def main():
             write_message("outlinks", result.outlinks)
             write_message("requisites", [dataclasses.asdict(v) for v in result.requisites.values()])
             write_message("status_code", result.status_code)
-            write_message("screenshot", {
-                "full": base64.b85encode(browser.screenshot).decode(),
-                "thumb": base64.b85encode(browser.thumbnail).decode()
-            })
+            if browser.screenshot:
+                assert browser.thumbnail
+                write_message("screenshot", {
+                    "full": base64.b85encode(browser.screenshot).decode(),
+                    "thumb": base64.b85encode(browser.thumbnail).decode()
+                })
             if jsr := result.custom_js:
                 write_message("custom_js", result.custom_js)
                 if jsr['status'] != "success":
