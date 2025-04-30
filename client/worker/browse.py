@@ -108,7 +108,10 @@ class Brozzler:
 
     def _on_screenshot(self, screenshot):
         # Inspired by Brozzler's implementation of this. Brozzler is also Apache2.0-licenced
-        logger.debug("writing screenshot")
+        logger.debug("processing screenshot")
+        if not screenshot:
+            logger.error("got empty screenshot from chrome, returning")
+            return
         self.screenshot = screenshot
         if self.status_code < 400:
             # Avoids writing broken screenshots to WARC
