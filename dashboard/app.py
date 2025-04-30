@@ -76,6 +76,9 @@ async def screenshot(id, key):
     result = await QUEUE.get_result(id)
     if not result:
         abort(404)
+    if not result.data[key] and key == "thumb":
+        # Thumbnail didn't work. Send the full image instead.
+        key = "full"
     return result.data[key], {"Content-Type": "image/jpeg"}
 
 @app.errorhandler(werkzeug.exceptions.HTTPException)

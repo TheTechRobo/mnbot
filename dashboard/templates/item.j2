@@ -76,7 +76,12 @@
 	{% if results %}
 		{% for try, try_results in results.items() %}
 			<p>
-				<b>Attempt {{ try + 1 }} (on pipeline {{ item.attempts[try].pipeline }} {{ item.attempts[try].pipeline_version or "" }})</b>
+				<b>
+					<span {% if item.attempts[try].error %} class="error" {% endif %}>
+						Attempt {{ try + 1 }}
+					</span>
+					(on pipeline {{ item.attempts[try].pipeline }} {{ item.attempts[try].pipeline_version or "" }})
+				</b>
 			</p>
 			<ul>
 				{% for result in try_results %}
@@ -96,7 +101,7 @@
 									</ul>
 								{% elif result.type == "screenshot" %}
 									<a href="{{ url_for('screenshot', id = result.id, key = 'full') }}">
-										<img src="{{ url_for('screenshot', id = result.id, key = 'thumb') }}" alt="Page screenshot" />
+										<img class="thumb" src="{{ url_for('screenshot', id = result.id, key = 'thumb') }}" alt="Page screenshot" />
 										<br />
 										<small>Click to enlarge image</small>
 									</a>
@@ -157,12 +162,14 @@
 						</details>
 					</li>
 				{% else %}
-					<p>No results exist yet for this attempt. It may still be running.</p>
+					{% if not item.attempts[try].error %}
+						<p>No results exist yet for this attempt. It may still be running.</p>
+					{% endif %}
 				{% endfor %}
 				{% if item.attempts[try].error %}
 					<li>
 						<details>
-							<summary>Error: <code>{{ item.attempts[try].error.split('\n')[0].strip() }}</code> {% if '\n' in reason %}(click for full message) {% endif %}</summary>
+							<summary><b>Error: </b><code>{{ item.attempts[try].error.split('\n')[0].strip() }}</code> {% if '\n' in reason %}(click for full message) {% endif %}</summary>
 							<pre>{{ item.attempts[try].error }}</pre>
 						</details>
 					</li>

@@ -109,21 +109,29 @@ class Brozzler:
     def _on_screenshot(self, screenshot):
         # Inspired by Brozzler's implementation of this. Brozzler is also Apache2.0-licenced
         logger.debug("writing screenshot")
-        thumbnail = thumb_jpeg(screenshot)
         self.screenshot = screenshot
-        self.thumbnail = thumbnail
-        self._write_warcprox_record(
-            url = "screenshot:" + self.canon_url,
-            content_type = "image/jpeg",
-            payload = screenshot,
-            warc_prefix = self.job.warc_prefix
-        )
-        self._write_warcprox_record(
-            url = "thumbnail:" + self.canon_url,
-            content_type = "image/jpeg",
-            payload = thumbnail,
-            warc_prefix = self.job.warc_prefix
-        )
+        if self.status_code < 400:
+            # Avoids writing broken screenshots to WARC
+            # (including warcprox's error pages!)
+            self._write_warcprox_record(
+                url = "screenshot:" + self.canon_url,
+                content_type = "image/jpeg",
+                payload = screenshot,
+                warc_prefix = self.job.warc_prefix
+            )
+
+        try:
+            self.thumbnail = thumb_jpeg(screenshot)
+        except Exception:
+            logger.exception("failed to convert screenshot to thumbnail")
+        else:
+            if self.status_code < 400:
+                self._write_warcprox_record(
+                    url = "thumbnail:" + self.canon_url,
+                    content_type = "image/jpeg",
+                    payload = self.thumbnail,
+                    warc_prefix = self.job.warc_prefix
+                )
 
     def _run_cdp_command(self, method: str, params: dict | None = None) -> typing.Any:
         # Abuse brozzler's innards a bit to run a custom CDP command.
@@ -366,19 +374,15 @@ class Brozzler:
             behavior_timeout = 180,
         )
         assert len(outlinks) == 0, "Brozzler didn't listen to us :["
-        status_code: int = self.browser.websock_thread.page_status
+        self.status_code: int = self.browser.websock_thread.page_status
         try:
             self._wait_for_idle(idle_time = 3, timeout = 10)
         except Timeout:
             logger.info("timed out waiting for idle; ignoring issue")
 
-        if status_code < 400:
-            # Only take screenshot when status code is not an error
-            # This prevents broken captures from having screenshots taken,
-            # and prevents warcprox's error pages from getting in there as well.
-            logger.info("taking screenshot")
-            self.browser._try_screenshot(self._on_screenshot, full_page = True)
-            logger.debug("took screenshot!")
+        logger.debug("taking screenshot")
+        self.browser._try_screenshot(self._on_screenshot, full_page = True)
+        logger.debug("took screenshot!")
 
         custom_js_result = None
         if self.job.custom_js:
@@ -405,7 +409,7 @@ class Brozzler:
                 final_url = final_url,
                 outlinks = list(outlinks),
                 custom_js = custom_js_result,
-                status_code = status_code,
+                status_code = self.status_code,
                 requisites = self.url_log
             )
             logger.debug("writing job result data")
@@ -441,12 +445,19 @@ def main():
             write_message("outlinks", result.outlinks)
             write_message("requisites", [dataclasses.asdict(v) for v in result.requisites.values()])
             write_message("status_code", result.status_code)
-            if browser.screenshot:
-                assert browser.thumbnail
+
+            screenshot = browser.screenshot
+            thumbnail = browser.thumbnail
+            if screenshot:
+                screenshot = base64.b85encode(screenshot).decode()
+            if thumbnail:
+                thumbnail = base64.b85encode(thumbnail).decode()
+            if screenshot or thumbnail:
                 write_message("screenshot", {
-                    "full": base64.b85encode(browser.screenshot).decode(),
-                    "thumb": base64.b85encode(browser.thumbnail).decode()
+                    "full": screenshot,
+                    "thumb": thumbnail,
                 })
+
             if jsr := result.custom_js:
                 write_message("custom_js", result.custom_js)
                 if jsr['status'] != "success":

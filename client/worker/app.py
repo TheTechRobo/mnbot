@@ -175,7 +175,10 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ua:
                         if type in ("status_code", "outlinks", "final_url", "requisites", "custom_js"):
                             await ws.store_result(id, type, tries, payload)
                         elif type == "screenshot":
-                            await ws.store_result(id, type, tries, payload, ("full", "thumb"))
+                            # Don't tell the tracker to decode the thumbnail
+                            # if there isn't a thumbnail
+                            decode_fields = [k for k in ("full", "thumb") if payload[k]]
+                            await ws.store_result(id, type, tries, payload, decode_fields)
                         elif type == "error":
                             # Cancel tasks, since both stdout and pread are about to get closed.
                             # Failing to do this results in a "Task exception was never retrieved"
