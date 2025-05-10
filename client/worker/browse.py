@@ -469,10 +469,16 @@ def main():
                 raise BadStatusCode(result.status_code)
             elif not result.final_url.startswith("http"):
                 raise MnError(f"Bad final_url {result.final_url}")
+        except BadStatusCode as e:
+            if e.fatal:
+                write_message("fatal", f"Fatal status code {e.code} (not retrying)")
+            else:
+                write_message("error", f"Bad status code {e.code}")
         except Exception as e:
             if isinstance(e, MnError) and e.fatal:
                 write_message("fatal", "Caught exception!\n" + traceback.format_exc())
-            write_message("error", "Caught exception!\n" + traceback.format_exc())
+            else:
+                write_message("error", "Caught exception!\n" + traceback.format_exc())
 
 if __name__ == "__main__":
     main()

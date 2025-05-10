@@ -1,0 +1,11 @@
+#!/bin/bash
+
+if git diff --quiet --cached client >/dev/null; then :
+	# No changes to the client.
+elif git diff --no-ext-diff --no-prefix --cached -a --unified=0 client | grep '^\+VERSION = ' >/dev/null; then :
+	# The client has been changed. The VERSION line has been changed in some way.
+else
+	# The client has been changed without changing VERSION.
+	echo error: You must update VERSION in client/worker/shared.py if changing the client.
+	exit 1
+fi
