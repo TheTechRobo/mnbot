@@ -6,7 +6,7 @@ RUN groupadd --gid 1000 mnbot \
 
 RUN apt-get update \
 		&& DEBIAN_FRONTEND=noninteractive apt-get -y install \
-			tini chromium libjpeg-dev python3-dev python3-pip xfonts-base sudo \
+			tini chromium libjpeg-dev python3-dev python3-pip xfonts-base sudo fonts-noto-color-emoji \
 		&& echo mnbot ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/mnbot \
 		&& chmod 0440 /etc/sudoers.d/mnbot \
 		&& apt-get clean
