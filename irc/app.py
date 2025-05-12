@@ -145,7 +145,7 @@ async def abandon(self: Bot, user: User, ran, id: str, *reason):
         return
     reason = f"Manual reclaim by {user.nick}: {' '.join(reason)}"
     yield f"Explanation: {reason!r}"
-    new_item = await QUEUE.fail(item, reason, len(item.attempts) - 1, is_poke = True)
+    new_item = await QUEUE.fail(item, reason, item.current_attempt(), is_poke = True)
     if new_item.status == Status.ERROR:
         yield f"Max tries reached for {new_item.id}, it has been moved to ERROR."
     elif new_item.status == Status.TODO:
@@ -166,7 +166,7 @@ async def dripfeed(self: Bot, user: User, ran: str, stash: str, raw_concurrency:
     else:
         yield f"Disabled dripfeeding of {stash}."
 
-@bot.command({"!!help", "!help"})
+@bot.command("!help")
 async def help(self: Bot, user: User, ran, command = None):
     yield f"Documentation can be found at {DOCUMENTATION_URL}."
 

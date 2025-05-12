@@ -35,28 +35,47 @@ async def translate_form_input():
         abort(400)
     return redirect(url_for("single_item", id = request.args['item']), 301)
 
-@app.route("/queue")
-async def pending():
+def route_with_json(route, **kwargs):
+    """
+    Adds app.route for route and route + ".json".
+    The callback should take an argument called html, which indicates whether or not to return HTML.
+    """
+    assert "defaults" not in kwargs
+    def inner(cb):
+        json_cb = app.route(
+            route + ".json",
+            defaults = {"html": False},
+            **kwargs
+        )(cb)
+        return app.route(
+            route,
+            defaults = {"html": True},
+            **kwargs
+        )(json_cb)
+    return inner
+
+@route_with_json("/queue")
+async def pending(html):
     pending = await QUEUE.pending()
-    if request.accept_mimetypes.accept_html:
+    if html:
         return await render_template("pending.j2", pending = pending, adj = "Pending")
     return {"status": 200, "pending": [i.as_json_friendly_dict() for i in pending]}
 
-@app.route("/claims")
-async def claims():
+@route_with_json("/claims")
+async def claims(html):
     claims = QUEUE.claimed()
-    if request.accept_mimetypes.accept_html:
+    if html:
         return await render_template("pending.j2", pending = claims, adj = "Claimed")
     claims = []
     async for item in QUEUE.claimed():
         claims.append(item)
     return {"status": 200, "claims": claims}
 
-@app.route("/item/<id>")
-async def single_item(id):
+@route_with_json("/item/<id>")
+async def single_item(id, html):
     item = await QUEUE.get(id)
     if not item:
-        if request.accept_mimetypes.accept_html:
+        if html:
             return await render_template("error.j2", reason = "Item not found", description = f"Item {id} was not found.", show_item_search = True), 404
         return {"status": 404, "message": "Item not found."}, 404
     results = {}
@@ -65,7 +84,7 @@ async def single_item(id):
     async for result in QUEUE.get_results(item):
         results[result.attempt].append(result)
     results = dict(sorted(results.items()))
-    if request.accept_mimetypes.accept_html:
+    if html:
         return await render_template("item.j2", item = item, results = results)
     return {"status": 200, "item": item.as_json_friendly_dict(), "results": results}
 
