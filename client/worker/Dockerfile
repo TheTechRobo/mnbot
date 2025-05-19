@@ -6,13 +6,13 @@ RUN groupadd --gid 1000 mnbot \
 
 RUN apt-get update \
 		&& DEBIAN_FRONTEND=noninteractive apt-get -y install \
-			tini chromium libjpeg-dev python3-dev python3-pip xfonts-base sudo fonts-noto-color-emoji \
+			tini chromium libjpeg-dev python3-dev python3-pip xfonts-base sudo fonts-noto-color-emoji fonts-noto-core fonts-noto-mono fonts-noto-cjk \
 		&& echo mnbot ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/mnbot \
 		&& chmod 0440 /etc/sudoers.d/mnbot \
 		&& apt-get clean
 
-# eb922f515545783158915a5edfb95f4548ad65c1 is known to work.
-RUN pip3 install --break-system-packages rethinkdb git+https://github.com/internetarchive/brozzler@eb922f515545783158915a5edfb95f4548ad65c1 websockets doublethink yt-dlp aiofiles
+# a665d49bba2db8a4094d075e1e5c0803198745fc is known to work.
+RUN pip3 install --break-system-packages rethinkdb git+https://github.com/internetarchive/brozzler@a665d49bba2db8a4094d075e1e5c0803198745fc websockets doublethink yt-dlp aiofiles
 RUN pip3 install --break-system-packages --upgrade rethinkdb
 
 RUN mkdir /app
@@ -30,7 +30,7 @@ USER mnbot
 # Suspected WebGL, and I was right! https://stackoverflow.com/a/75859549/9654083
 # But keeping WebGL enabled in software mode both uses tons of CPU and for some reason hangs the first screenshot attempt.
 # Example site: GitHub's homepage.
-# So we just disable WebGL entirely. It's not like we really need it.
+# So we just disable WebGL entirely. It's not like we really need it for the most part.
 # The software rendering stuff is kept just in case.
 ENV BROZZLER_EXTRA_CHROME_ARGS "--use-angle=swiftshader --use-gl=angle --in-process-gpu --disable-webgl --disable-3d-apis"
 
