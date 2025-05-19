@@ -44,6 +44,7 @@ PRESET_USER_AGENTS = {
 )
 @bot.add_argument("--explanation", "--explain", "-e")
 @bot.add_argument("--custom-js")
+@bot.add_argument("--skip-url-validation", action = "store_true")
 @bot.add_argument("url")
 @bot.argparse("!brozzle")
 @bot.command({"!b", "!brozzle"}, required_modes="+@")
@@ -52,26 +53,31 @@ async def brozzle(self: Bot, user: User, ran, args):
     custom_js = None
     if args.custom_js:
         if "@" not in user.modes:
-            yield "The --custom-js param can only be used by operators."
+            yield "Sorry, but only operators can use custom JavaScript."
             return
         try:
             if not AIOHTTP_SESSION:
                 AIOHTTP_SESSION = aiohttp.ClientSession()
             async with AIOHTTP_SESSION.get(args.custom_js) as resp:
                 if resp.status != 200:
-                    yield f"Got status {resp.status} (expected 200) when fetching custom JS."
+                    yield f"Error: Got status {resp.status} (expected 200) when fetching custom JS."
                     return
                 custom_js = await resp.text()
                 if not custom_js.startswith("//! mnbot v1\n"):
-                    yield "Custom JS must start with a valid mnbot header."
+                    yield "Error: Custom JS must start with a valid mnbot header."
                     return
         except Exception:
             yield "An error occured when retrieving custom JS."
             return
-    result = validators.url(args.url, strict_query = False, private = False)
-    if result is not True:
-        yield "Failed to validate your URL. Cowardly bailing out."
-        return
+    if args.no_url_validation:
+        if "@" not in user.modes:
+            yield "Sorry, but only operators can bypass URL validation."
+            return
+    else:
+        result = validators.url(args.url, strict_query = False, private = False)
+        if result is not True:
+            yield "Failed to validate your URL, cowardly bailing out. (Ops may use --skip-url-validation to bypass this.)"
+            return
     ua = PRESET_USER_AGENTS.get(args.user_agent, args.user_agent)
     if ua := PRESET_USER_AGENTS.get(args.user_agent):
         ua = "$" + ua
