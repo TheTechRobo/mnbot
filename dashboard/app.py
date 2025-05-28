@@ -42,16 +42,16 @@ def route_with_json(route, **kwargs):
     """
     assert "defaults" not in kwargs
     def inner(cb):
-        json_cb = app.route(
-            route + ".json",
-            defaults = {"html": False},
-            **kwargs
-        )(cb)
-        return app.route(
+        html_cb = app.route(
             route,
             defaults = {"html": True},
             **kwargs
-        )(json_cb)
+        )(cb)
+        return app.route(
+            route + ".json",
+            defaults = {"html": False},
+            **kwargs
+        )(html_cb)
     return inner
 
 @route_with_json("/queue")
