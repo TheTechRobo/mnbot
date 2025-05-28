@@ -69,7 +69,7 @@ async def brozzle(self: Bot, user: User, ran, args):
         except Exception:
             yield "An error occured when retrieving custom JS."
             return
-    if args.no_url_validation:
+    if args.skip_url_validation:
         if "@" not in user.modes:
             yield "Sorry, but only operators can bypass URL validation."
             return
