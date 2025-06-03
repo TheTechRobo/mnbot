@@ -13,13 +13,13 @@ QUEUE = Queue("mnbot")
 app = EscapingQuart(__name__)
 app.jinja_env.globals.update(isinstance = isinstance)
 
-DOCUMENTATION_URL = os.getenv('DOCUMENTATION_URL', "")
+DOCUMENTATION_URL = os.getenv("DOCUMENTATION_URL")
 
 NAV = (
     ("/", "Dashboard"),
     ("/queue", "Pending"),
     ("/claims", "Claims"),
-    (DOCUMENTATION_URL, "Documentation"),
+    ("/docs", "Documentation"),
 )
 
 app.before_serving(QUEUE.check)
@@ -32,6 +32,12 @@ def aaa():
 async def home():
     status = await QUEUE.counts()
     return await render_template("home.j2", status = status.counts)
+
+@app.route("/docs")
+async def docs():
+    if DOCUMENTATION_URL:
+        return redirect(DOCUMENTATION_URL, 302)
+    return await render_template("error.j2", reason = "No documentation URL", description = f"The DOCUMENTATION_URL environment variable was not set. Please report this!"), 500
 
 @app.route("/item/translate")
 async def translate_form_input():
