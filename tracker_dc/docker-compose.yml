@@ -69,6 +69,7 @@ services:
         condition: service_completed_successfully
     environment:
       RUE_DB_HOST: ${RUE_DB_HOST:-rethinkdb}
+      DOCUMENTATION_URL: ${DOCUMENTATION_URL}
     extra_hosts:
       - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
     ports:

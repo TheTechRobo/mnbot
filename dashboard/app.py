@@ -1,5 +1,6 @@
 from quart import Quart, abort, redirect, render_template, request, url_for
 import werkzeug.exceptions
+import os
 
 class EscapingQuart(Quart):
     def select_jinja_autoescape(self, filename: str) -> bool:
@@ -12,10 +13,13 @@ QUEUE = Queue("mnbot")
 app = EscapingQuart(__name__)
 app.jinja_env.globals.update(isinstance = isinstance)
 
+DOCUMENTATION_URL = os.getenv('DOCUMENTATION_URL', "")
+
 NAV = (
     ("/", "Dashboard"),
     ("/queue", "Pending"),
     ("/claims", "Claims"),
+    (DOCUMENTATION_URL, "Documentation"),
 )
 
 app.before_serving(QUEUE.check)
