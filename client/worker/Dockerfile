@@ -31,8 +31,7 @@ USER mnbot
 # But keeping WebGL enabled in software mode both uses tons of CPU and for some reason hangs the first screenshot attempt.
 # Example site: GitHub's homepage.
 # So we just disable WebGL entirely. It's not like we really need it for the most part.
-# The software rendering stuff is kept just in case.
-ENV BROZZLER_EXTRA_CHROME_ARGS "--use-angle=swiftshader --use-gl=angle --in-process-gpu --disable-webgl --disable-3d-apis"
+ENV BROZZLER_EXTRA_CHROME_ARGS "--in-process-gpu --disable-webgl --disable-3d-apis"
 
 STOPSIGNAL SIGINT
 LABEL com.centurylinklabs.watchtower.stop-signal="SIGINT"
