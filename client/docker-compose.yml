@@ -1,13 +1,11 @@
 services:
-  # Brozzler now uses headless Chrome, so this is no longer necessary.
-  # Keeping it here just in case.
-  #x:
-  #  build: xvnc4
-  #  expose:
-  #    - "5902"
-  #  ports:
-  #    - "5902:5902"
-  #  restart: always
+  x:
+    build: xvnc4
+    expose:
+      - "5902"
+    ports:
+      - "5902:5902"
+    restart: always
   rethinkdb:
     restart: always
     image: rethinkdb:latest

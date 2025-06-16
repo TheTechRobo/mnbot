@@ -44,7 +44,8 @@ class Brozzler:
         self.browser = self.pool.acquire()
         self.browser.start(
             proxy = "http://" + PROXY_URL,
-            cookie_db = job.cookie_jar
+            cookie_db = job.cookie_jar,
+            headless = False,
         )
         self.job = job
         self.canon_url = str(urlcanon.semantic(job.url))

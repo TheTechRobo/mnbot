@@ -12,7 +12,7 @@ RUN apt-get update \
 		&& apt-get clean
 
 # a665d49bba2db8a4094d075e1e5c0803198745fc is known to work.
-RUN pip3 install --break-system-packages rethinkdb git+https://github.com/internetarchive/brozzler@a665d49bba2db8a4094d075e1e5c0803198745fc websockets doublethink yt-dlp aiofiles
+RUN pip3 install --break-system-packages rethinkdb git+https://github.com/internetarchive/brozzler@768d17a4a4c7d76568fdbfca66ddeaaf09578029 websockets doublethink yt-dlp aiofiles
 RUN pip3 install --break-system-packages --upgrade rethinkdb
 
 RUN mkdir /app
@@ -23,7 +23,7 @@ COPY tracker.py /app
 COPY result.py /app
 
 USER mnbot
-#ENV DISPLAY x:2.0
+ENV DISPLAY x:2.0
 
 # This caused me about three hours of hair-tearing.
 # GitHub's homepage didn't work, but everything else did.
