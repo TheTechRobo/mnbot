@@ -108,7 +108,6 @@ async def single_item(id, html):
     print(type(results[0][1].data['full']))
     return {"status": 200, "item": item.as_json_friendly_dict(), "results": results}
 
-
 @app.route("/item/<id>/requisites")
 async def requisites(id):
     item = await QUEUE.get(id)
@@ -124,6 +123,21 @@ async def get_requisites(item):
                     if req := entry['request']:
                         if req['url'].startswith("http"):
                             yield req['url'] + "\n"
+    yield "\nEOF"
+
+@app.route("/item/<id>/outlinks")
+async def outlinks(id):
+    item = await QUEUE.get(id)
+    if not item:
+        return "", {"content-type": "text/plain"}
+    return get_outlinks(item), {"content-type": "text/plain"}
+
+async def get_outlinks(item):
+    async for result in QUEUE.get_results(item):
+        if result.type == "outlinks":
+            for outlink in result.data:
+                if outlink.startswith("http"):
+                    yield outlink + "\n"
     yield "\nEOF"
 
 @app.route("/screenshot/<id>/<key>.jpg")
