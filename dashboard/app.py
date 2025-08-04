@@ -1,6 +1,7 @@
 from quart import Quart, abort, redirect, render_template, request, url_for
 import werkzeug.exceptions
 import os
+import base64
 
 class EscapingQuart(Quart):
     def select_jinja_autoescape(self, filename: str) -> bool:
@@ -96,7 +97,34 @@ async def single_item(id, html):
     results = dict(sorted(results.items()))
     if html:
         return await render_template("item.j2", item = item, results = results)
+
+    # Temporary hack since rue is probably getting replaced soon
+    for attempt_results in results.values():
+        for result in attempt_results:
+            if result.type == "screenshot":
+                result.data['full'] = base64.b64encode(result.data['full']).decode()
+                result.data['thumb'] = base64.b64encode(result.data['thumb']).decode()
+
+    print(type(results[0][1].data['full']))
     return {"status": 200, "item": item.as_json_friendly_dict(), "results": results}
+
+
+@app.route("/item/<id>/requisites")
+async def requisites(id):
+    item = await QUEUE.get(id)
+    if not item:
+        return "", {"content-type": "text/plain"}
+    return get_requisites(item), {"content-type": "text/plain"}
+
+async def get_requisites(item):
+    async for result in QUEUE.get_results(item):
+        if result.type == "requisites":
+            for requisite in result.data:
+                for entry in requisite['chain']:
+                    if req := entry['request']:
+                        if req['url'].startswith("http"):
+                            yield req['url'] + "\n"
+    yield "\nEOF"
 
 @app.route("/screenshot/<id>/<key>.jpg")
 async def screenshot(id, key):
