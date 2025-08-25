@@ -104,8 +104,6 @@ async def single_item(id, html):
             if result.type == "screenshot":
                 result.data['full'] = base64.b64encode(result.data['full']).decode()
                 result.data['thumb'] = base64.b64encode(result.data['thumb']).decode()
-
-    print(type(results[0][1].data['full']))
     return {"status": 200, "item": item.as_json_friendly_dict(), "results": results}
 
 @app.route("/item/<id>/requisites")
