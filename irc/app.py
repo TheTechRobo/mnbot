@@ -45,12 +45,17 @@ PRESET_USER_AGENTS = {
 @bot.add_argument("--explanation", "--explain", "-e")
 @bot.add_argument("--custom-js")
 @bot.add_argument("--skip-url-validation", action = "store_true")
+@bot.add_argument("--nice", "-n", type = int, default = 0)
 @bot.add_argument("url")
 @bot.argparse("!brozzle")
 @bot.command({"!b", "!brozzle"}, required_modes="+@")
 async def brozzle(self: Bot, user: User, ran, args):
     global AIOHTTP_SESSION
     custom_js = None
+    if args.nice < -10:
+        if "@" not in user.modes:
+            yield "Sorry, but only operators can queue with a niceness lower than -10."
+            return
     if args.custom_js:
         if "@" not in user.modes:
             yield "Sorry, but only operators can use custom JavaScript."
@@ -89,6 +94,7 @@ async def brozzle(self: Bot, user: User, ran, args):
         user.nick,
         explanation = args.explanation,
         metadata = {"ua": ua, "custom_js": custom_js},
+        priority = args.nice
     )
     yield f"Queued {args.url} for Brozzler-based archival. You will be notified when it finishes. Use !status {ent.id} or check {item_url(ent.id)} for details."
 
