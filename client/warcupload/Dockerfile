@@ -1,4 +1,4 @@
-FROM give-me-some.very-good-quality-co.de/public/bullseye-client AS bsc
+FROM worktree.ca/thetechrobo/bullseye-client AS bsc
 
 FROM python:3.9-alpine
 

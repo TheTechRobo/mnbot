@@ -56,12 +56,25 @@ services:
       # Cf. https://stackoverflow.com/a/62383642/9654083 and https://stackoverflow.com/a/64460373/9654083
       # (SYS_ADMIN seems like a bad idea.)
       - seccomp=chrome.json
+      - apparmor=${APPARMOR_PROFILE}
     depends_on:
       warcprox:
         condition: service_started
       rethinkdb:
         condition: service_started
+      x:
+        condition: service_started
     # No job should realistically take more than 15 minutes (or even close),
     # so if we exceed that, something is probably stuck.
     stop_grace_period: 15m
-
+  chrome_test:
+    build:
+      context: worker
+    security_opt:
+      - seccomp=chrome.json
+      - apparmor=${APPARMOR_PROFILE}
+    entrypoint: "/bin/sh"
+    profiles: ["test"]
+    depends_on:
+      x:
+        condition: service_started
