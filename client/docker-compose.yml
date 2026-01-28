@@ -28,6 +28,10 @@ services:
     depends_on:
       rethinkdb:
         condition: service_started
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
   warcupload:
     restart: always
     build:
