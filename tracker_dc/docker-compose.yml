@@ -27,7 +27,7 @@ services:
       - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
   tracker:
     build:
-      context: ../server
+      context: ../tracker/server
     environment:
       RUE_DB_HOST: ${RUE_DB_HOST:-rethinkdb}
       H2IBOT_GET_URL: ${H2IBOT_GET_URL}
@@ -45,7 +45,7 @@ services:
       - 8897:8897
   bot:
     build:
-      context: ../irc
+      context: ../tracker/irc
     environment:
       RUE_DB_HOST: ${RUE_DB_HOST:-rethinkdb}
       H2IBOT_GET_URL: ${H2IBOT_GET_URL}
@@ -61,7 +61,7 @@ services:
       - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
   dashboard:
     build:
-      context: ../dashboard
+      context: ../tracker/dashboard
     restart: always
     init: true
     depends_on:
