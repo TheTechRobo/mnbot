@@ -99,7 +99,7 @@
 											</li>
 										{% endfor %}
 									</ul>
-								{% elif result.type == "screenshot" %}
+								{% elif result.type in ("screenshot", "cjs_screenshot") %}
 									<a href="{{ url_for('screenshot', id = result.id, key = 'full') }}">
 										<img class="thumb" src="{{ url_for('screenshot', id = result.id, key = 'thumb') }}" alt="Page screenshot" />
 										<br />

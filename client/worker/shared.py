@@ -7,7 +7,7 @@ logging.basicConfig(format = "%(asctime)s %(levelname)s <:%(thread)s> : %(messag
 # Update this whenever you make a change, cosmetic or not.
 # During development you can ignore it, but when you actually
 # push it to prod, it *must* be updated.
-VERSION = "20260128.02"
+VERSION = "20260207.01"
 
 DEBUG = os.environ.get("DEBUG") == "1"
 if DEBUG:
@@ -31,21 +31,27 @@ class Job:
 
 @dataclasses.dataclass
 class Result:
+    id: str
     final_url: str
     outlinks: list
     custom_js: typing.Optional[dict]
     status_code: int
     requisites: dict[str, Chain]
+    custom_js_screenshot: str | None
 
     # Create a dict to write to the WARC
     def dict(self) -> dict[str, typing.Any]:
-        return {
+        r = {
+            "id": self.id,
             "final_url": self.final_url,
             "outlinks": self.outlinks,
             "custom_js_result": self.custom_js,
-            "requisites": [dataclasses.asdict(v) for v in self.requisites.values()]
+            "requisites": [dataclasses.asdict(v) for v in self.requisites.values()],
             # Don't include status code because that's already in the WARC
         }
+        if self.custom_js_screenshot:
+            r['custom_js_screenshot'] = self.custom_js_screenshot
+        return r
 
     def full_dict(self) -> typing.Dict[str, typing.Any]:
         return dataclasses.asdict(self)

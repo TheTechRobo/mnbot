@@ -137,6 +137,9 @@ class Brozzler:
                     warc_prefix = self.job.warc_prefix
                 )
 
+    def _on_cjs_screenshot(self, screenshot):
+        self.custom_js_screenshot = screenshot
+
     def _run_cdp_command(self, method: str, params: dict | None = None) -> typing.Any:
         # Abuse brozzler's innards a bit to run a custom CDP command.
         # If this breaks, I was never here.
@@ -340,6 +343,15 @@ class Brozzler:
         self._wait_for(is_idle, timeout, "idle")
         logger.debug("got network idle!")
 
+    def _capture_dom(self) -> str:
+        # First get the root node ID using DOM.getDocument (which gets the root node).
+        logger.debug("getting root node ID")
+        root_node_id = self._run_cdp_command("DOM.getDocument")['result']['root']['nodeId']
+        # Now get the outer HTML of the root node.
+        logger.debug(f"getting outer HTML for node {root_node_id}")
+        outer_html = self._run_cdp_command("DOM.getOuterHTML", {"nodeId": root_node_id})['result']['outerHTML']
+        return outer_html
+
     def _brozzle(self) -> Result:
         assert self.browser.is_running()
 
@@ -388,33 +400,32 @@ class Brozzler:
         self.browser._try_screenshot(self._on_screenshot, full_page = True)
         logger.debug("took screenshot!")
 
+        outer_html = self._capture_dom()
+        logger.debug("writing outer HTML to WARC")
+        self._write_warcprox_record("rendered-dom:" + self.canon_url, "text/html", outer_html.encode(), self.job.warc_prefix)
+
         custom_js_result = None
+        custom_js_screenshot = None
         if self.job.custom_js:
             custom_js_result = self._run_custom_js()
+            self.browser._try_screenshot(self._on_cjs_screenshot, full_page = True)
+            if self.custom_js_screenshot:
+                custom_js_screenshot = base64.b85encode(self.custom_js_screenshot).decode()
 
         logger.debug("extracting outlinks")
         outlinks = self.browser.extract_outlinks()
         logger.debug("visiting anchors")
         self.browser.visit_hashtags(final_url, [], outlinks)
 
-        # Dump the DOM
-        # First get the root node ID using DOM.getDocument (which gets the root node).
-        logger.debug("getting root node ID")
-        root_node_id = self._run_cdp_command("DOM.getDocument")['result']['root']['nodeId']
-        # Now get the outer HTML of the root node.
-        logger.debug(f"getting outer HTML for node {root_node_id}")
-        outer_html = self._run_cdp_command("DOM.getOuterHTML", {"nodeId": root_node_id})['result']['outerHTML']
-        # And write it to the WARC.
-        logger.debug("writing outer HTML to WARC")
-        self._write_warcprox_record("rendered-dom:" + self.canon_url, "text/html", outer_html.encode(), self.job.warc_prefix)
-
         with self.websock_thread_lock:
             r = Result(
+                id = self.job.full_job['id'],
                 final_url = final_url,
                 outlinks = list(outlinks),
                 custom_js = custom_js_result,
                 status_code = self.status_code,
-                requisites = self.url_log
+                requisites = self.url_log,
+                custom_js_screenshot = custom_js_screenshot,
             )
             logger.debug("writing job result data")
             self._write_warcprox_record(
@@ -462,6 +473,8 @@ def main():
                     "thumb": thumbnail,
                 })
 
+            if result.custom_js_screenshot:
+                write_message("cjs_screenshot", {"full": result.custom_js_screenshot})
             if jsr := result.custom_js:
                 write_message("custom_js", result.custom_js)
                 if jsr['status'] != "success":

@@ -11,8 +11,8 @@ RUN apt-get update \
 		&& chmod 0440 /etc/sudoers.d/mnbot \
 		&& apt-get clean
 
-# a665d49bba2db8a4094d075e1e5c0803198745fc is known to work.
-RUN pip3 install --break-system-packages rethinkdb git+https://github.com/internetarchive/brozzler@768d17a4a4c7d76568fdbfca66ddeaaf09578029 websockets doublethink yt-dlp aiofiles
+# 06fc825d3fbed9801110b2d3f562c44d72940862 is known to work.
+RUN pip3 install --break-system-packages rethinkdb git+https://github.com/internetarchive/brozzler@06fc825d3fbed9801110b2d3f562c44d72940862 websockets doublethink yt-dlp aiofiles
 RUN pip3 install --break-system-packages --upgrade rethinkdb
 
 RUN mkdir /app
