@@ -58,8 +58,6 @@ class Brozzler:
             }),
         }
         self.websock_thread_lock = threading.Lock()
-        self.active_connections = 0
-        self.last_network_activity = time.time()
         self.url_log: dict[str, Chain] = {}
 
         # Shim for _handle_message so we can log responses
@@ -140,10 +138,9 @@ class Brozzler:
     def _on_cjs_screenshot(self, screenshot):
         self.custom_js_screenshot = screenshot
 
-    def _run_cdp_command(self, method: str, params: dict | None = None) -> typing.Any:
+    def _run_cdp_command(self, method: str, params: dict | None = None, timeout = 45) -> typing.Any:
         # Abuse brozzler's innards a bit to run a custom CDP command.
         # If this breaks, I was never here.
-        # TODO: Burn with fire.
         params = params or {}
         logger.debug(f"running CDP command {method}")
         assert self.browser.websock_thread
@@ -155,7 +152,7 @@ class Brozzler:
         logger.debug("waiting for response")
         self._wait_for(
             lambda : self.browser.websock_thread.received_result(msg_id),
-            45,
+            timeout,
             "CDP result"
         )
         message = self.browser.websock_thread.pop_result(msg_id)
@@ -198,8 +195,6 @@ class Brozzler:
     def _message_handler(self, websock, json_message: str):
         """
         Shim for browser.websock_thread._handle_message.
-
-        Keeps track of network requests for logging and checking for idle.
         """
         # brozzler gets priority so an exception can't lose messages
         self.previous_message_handler(websock, json_message)
@@ -209,7 +204,6 @@ class Brozzler:
                 method = message['method']
                 params = message['params']
                 if method == "Network.requestWillBeSent":
-                    self.active_connections += 1
                     request_id = params['requestId']
                     if request_id not in self.url_log:
                         self.url_log[request_id] = Chain([], request_id)
@@ -217,29 +211,20 @@ class Brozzler:
                         self.url_log[request_id].chain[-1].response = Response.from_dict(redirect_response)
                     request = Request.from_params(params)
                     self.url_log[request_id].chain.append(Pair(request, None))
-                    self.last_network_activity = time.time()
                 elif method == "Network.responseReceived":
                     request_id = params['requestId']
                     response = Response.from_params(params)
                     self.url_log[request_id].chain[-1].response = response
-                    self.last_network_activity = time.time()
                 elif method == "Network.dataReceived":
                     request_id = params['requestId']
                     self.url_log[request_id].chain[-1].response.length += params['dataLength']
-                    self.last_network_activity = time.time()
                 elif method == "Network.loadingFinished":
                     # Future: Submit log to websocket
-                    self.active_connections -= 1
-                    self.last_network_activity = time.time()
                     pass
                 elif method == "Network.loadingFailed":
-                    self.active_connections -= 1
-                    self.last_network_activity = time.time()
                     request_id = params['requestId']
                     error = Error(text = params['errorText'])
                     self.url_log[request_id].chain[-1].response = error
-            if self.active_connections < 0:
-                self.active_connections = 0
 
     # Shamelessly stolen from brozzler's Worker._browse_page.
     # Apparently service workers don't get added to the right WARC:
@@ -303,7 +288,8 @@ class Brozzler:
                 "replMode": True,
                 # Makes it actually return the value
                 "returnByValue": True,
-            }
+            },
+            timeout = 90,
         )
         try:
             custom_js_result = {
@@ -331,18 +317,6 @@ class Brozzler:
         logger.debug("got browser version %s", version)
         return version
 
-    def _wait_for_idle(self, *, idle_time: float, timeout: int):
-        """
-        Waits up to timeout seconds for network to have been idle for idle_time.
-        """
-        logger.debug("waiting for network idle")
-        def is_idle():
-            with self.websock_thread_lock:
-                diff = time.time() - self.last_network_activity
-                return self.active_connections == 0 and diff > idle_time
-        self._wait_for(is_idle, timeout, "idle")
-        logger.debug("got network idle!")
-
     def _capture_dom(self) -> str:
         # First get the root node ID using DOM.getDocument (which gets the root node).
         logger.debug("getting root node ID")
@@ -351,6 +325,15 @@ class Brozzler:
         logger.debug(f"getting outer HTML for node {root_node_id}")
         outer_html = self._run_cdp_command("DOM.getOuterHTML", {"nodeId": root_node_id})['result']['outerHTML']
         return outer_html
+
+    def _set_metrics_override(self, width = 0, height = 0, device_scale_factor = 0):
+        req = dict(
+            width = width,
+            height = height,
+            deviceScaleFactor = device_scale_factor,
+            mobile = False,
+        )
+        self._run_cdp_command("Emulation.setDeviceMetricsOverride", req)
 
     def _brozzle(self) -> Result:
         assert self.browser.is_running()
@@ -391,13 +374,12 @@ class Brozzler:
         )
         assert len(outlinks) == 0, "Brozzler didn't listen to us :["
         self.status_code: int = self.browser.websock_thread.page_status
-        try:
-            self._wait_for_idle(idle_time = 3, timeout = 10)
-        except Timeout:
-            logger.info("timed out waiting for idle; ignoring issue")
+        logger.debug("waiting for idle")
+        self.browser._wait_for_idle(idle_time = 3, timeout = 10)
 
         logger.debug("taking screenshot")
         self.browser._try_screenshot(self._on_screenshot, full_page = True)
+        self._set_metrics_override()
         logger.debug("took screenshot!")
 
         outer_html = self._capture_dom()
@@ -408,6 +390,8 @@ class Brozzler:
         custom_js_screenshot = None
         if self.job.custom_js:
             custom_js_result = self._run_custom_js()
+            logger.debug("waiting for idle after custom JS")
+            self.browser._wait_for_idle(idle_time = 3, timeout = 5)
             self.browser._try_screenshot(self._on_cjs_screenshot, full_page = True)
             if self.custom_js_screenshot:
                 custom_js_screenshot = base64.b85encode(self.custom_js_screenshot).decode()
