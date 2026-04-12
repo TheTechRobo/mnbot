@@ -134,6 +134,8 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ua:
         stdout = subprocess.PIPE,
         stderr = subprocess.STDOUT,
         pass_fds = (pwrite,),
+        # Temporary fix for massive console.log messages
+        limit = 2**20,
     )
     os.close(pwrite)
 
