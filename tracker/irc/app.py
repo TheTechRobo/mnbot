@@ -11,6 +11,16 @@ H2IBOT_GET_URL = os.environ['H2IBOT_GET_URL']
 H2IBOT_POST_URL = os.environ['H2IBOT_POST_URL']
 TRACKER_BASE_URL = os.environ['TRACKER_BASE_URL'].rstrip("/")
 DOCUMENTATION_URL = os.environ['DOCUMENTATION_URL']
+MNBOT_HEADER = "//! mnbot v1" # DO NOT ADD \n or \r\n here.
+
+def is_mnbot_js(payload):
+    """
+    Returns true if the payload is a mnbot CJS header.
+    """
+    if not payload.startswith(MNBOT_HEADER): return False
+    def validate_suffix(payload, suffix):
+        return payload[len(MNBOT_HEADER):len(MNBOT_HEADER)+len(suffix)] == suffix
+    return validate_suffix(payload, "\n") or validate_suffix(payload, "\r\n")
 
 def item_url(id: str | None):
     if not id:
@@ -68,7 +78,7 @@ async def brozzle(self: Bot, user: User, ran, args):
                     yield f"Error: Got status {resp.status} (expected 200) when fetching custom JS."
                     return
                 custom_js = await resp.text()
-                if not custom_js.startswith("//! mnbot v1\n"):
+                if not is_mnbot_js(custom_js):
                     yield "Error: Custom JS must start with a valid mnbot header."
                     return
         except Exception:
