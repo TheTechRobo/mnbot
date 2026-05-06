@@ -101,9 +101,10 @@ async def single_item(id, html):
     # Temporary hack since rue is probably getting replaced soon
     for attempt_results in results.values():
         for result in attempt_results:
-            if result.type == "screenshot":
+            if result.type in ("screenshot", "cjs_screenshot"):
                 result.data['full'] = base64.b64encode(result.data['full']).decode()
-                result.data['thumb'] = base64.b64encode(result.data['thumb']).decode()
+                if result.data.get("thumb"):
+                    result.data['thumb'] = base64.b64encode(result.data['thumb']).decode()
     return {"status": 200, "item": item.as_json_friendly_dict(), "results": results}
 
 @app.route("/item/<id>/requisites")
