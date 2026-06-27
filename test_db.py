@@ -1,0 +1,827 @@
+import sys
+import asyncio
+import os
+import os.path
+import secrets
+import string
+import dataclasses
+
+import sqlalchemy, sqlalchemy.ext.asyncio, sqlalchemy.exc, sqlalchemy.dialects.postgresql.asyncpg
+import asyncpg
+
+import pytest
+import pytest_asyncio
+
+from tracker.common import db, model
+from tracker.scripts.__main__ import add_pipeline, create
+
+@dataclasses.dataclass
+class CreateArgs:
+    uri: str
+    tries: int
+
+@dataclasses.dataclass
+class AddPipelineArgs:
+    uri: str
+    id: str
+    matchonly: bool
+
+CREATED = asyncio.Event()
+
+phase_report_key = pytest.StashKey[dict[str, pytest.CollectReport]]()
+# https://docs.pytest.org/en/latest/example/simple.html#making-test-result-information-available-in-fixtures
+# Allows fixtures to tell whether the test passed - currently unused, but may be useful
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    rep = yield
+
+    # store test results for each phase of a call, which can
+    # be "setup", "call", "teardown"
+    item.stash.setdefault(phase_report_key, {})[rep.when] = rep
+
+    return rep
+
+@pytest_asyncio.fixture()
+async def engine(request):
+    uri = os.environ['MNBOT_DATABASE_URI']
+    root_engine = sqlalchemy.ext.asyncio.create_async_engine(uri, isolation_level = "AUTOCOMMIT")
+    async with root_engine.connect() as conn:
+        await conn.execute(sqlalchemy.text("DROP SCHEMA IF EXISTS public CASCADE"))
+        await conn.execute(sqlalchemy.text("CREATE SCHEMA public AUTHORIZATION pg_database_owner"))
+        await conn.execute(sqlalchemy.text("GRANT USAGE ON SCHEMA public TO PUBLIC"))
+        await conn.execute(sqlalchemy.text("GRANT ALL ON SCHEMA public TO pg_database_owner"))
+        await conn.commit()
+    await create(CreateArgs(uri, 2))
+
+    engine = await db.create_engine(uri)
+    yield engine
+    await engine.dispose()
+
+    await root_engine.dispose()
+
+def _test(f):
+    return pytest.mark.asyncio(f)
+
+@_test
+async def test_authenticate(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests that pipeline authentication works.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("foo", False, "password")
+        await q.create_pipeline("bar", True, "password1")
+        foo = await q.pipeline("foo")
+        bar = await q.pipeline("bar")
+
+        with pytest.raises(db.AuthenticationFailure):
+            await foo.authenticate("password1")
+        with pytest.raises(db.AuthenticationFailure):
+            await bar.authenticate("password")
+        await foo.authenticate("password")
+        await bar.authenticate("password1")
+
+@_test
+async def test_get_job_counts(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests that the active job count works.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        async def make_job():
+            await q.create_jobs([db.JobCreation(db.generate_id(), model.JobType.BROZZLER, "foo", {}, "")])
+
+        assert (await q.get_job_counts()) == {}
+        await make_job()
+        assert (await q.get_job_counts()) == {model.JobType.BROZZLER: 1}
+        await make_job()
+        await make_job()
+        assert (await q.get_job_counts()) == {model.JobType.BROZZLER: 3}
+
+async def make_job(q, status = model.JobStatus.ACTIVE, concurrency = 0, nice = 0, tag = None, type = model.JobType.BROZZLER, depth = None):
+    id = db.generate_id()
+    await q.create_jobs([db.JobCreation(id, type, "foo", {}, "", status, concurrency, nice, tag, None, depth)])
+    return id
+
+async def make_pages(q, job_id, *payloads, parent_page = None):
+    pagecs = []
+    ids = []
+    for page in payloads:
+        id = db.generate_id()
+        ids.append(id)
+        pagecs.append(db.PageCreation(id, page, parent_page))
+    pages = await q.create_pages(job_id, pagecs)
+    return [pages[page_id] for page_id in ids]
+
+async def check_claim(q, expected_id, matchonly = False):
+    pipe = await q.pipeline("pipe")
+    res = await pipe._find_claimable_job(model.JobType.BROZZLER, matchonly, None)
+    assert res == expected_id
+
+async def check_all_claims(q, *expected_ids, type = model.JobType.BROZZLER):
+    res = await q.get_all_claimable_jobs(type)
+    assert tuple(res) == expected_ids
+
+@_test
+async def test_job_order(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests that jobs are dequeued in the correct order.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        await check_claim(q, None)
+        # Concurrency 0 or status != active = no claim
+        await make_job(q)
+        await make_job(q, status = model.JobStatus.DRAINING, concurrency = 1)
+        await check_claim(q, None)
+        await check_all_claims(q)
+
+        # The pipeline has no tags associated with it, so tags should not work
+        idtag = await make_job(q, concurrency = 1, tag = "baz", nice = 999)
+        await check_claim(q, None)
+        # However, it should show up in check_all_claims, which has no restrictions on tags
+        await check_all_claims(q, idtag)
+
+        id0 = await make_job(q, concurrency = 1, nice = 1)
+        await check_claim(q, id0)
+        id1 = await make_job(q, concurrency = 1)
+        await check_claim(q, id1)
+        id2 = await make_job(q, concurrency = 7)
+        await check_claim(q, id1)
+        await check_all_claims(q, id1, id2, id0, idtag)
+        id3 = await make_job(q, concurrency = 1, nice = -1)
+        await check_all_claims(q, id3, id1, id2, id0, idtag)
+
+@_test
+async def test_tags(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests that the tagging system works properly.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", True, "password")
+        pipe = await q.pipeline("pipe")
+        await pipe.create_tags("foo", "bar")
+        # Ensure duplicate tags are silently ignored and don't throw an error
+        await pipe.create_tags("foo", "baz")
+
+        # This tag is not assigned to the pipeline, so it shouldn't work
+        id1 = await make_job(q, concurrency = 1, tag = "quux")
+        await check_claim(q, None)
+        await check_claim(q, None, matchonly = True)
+        await check_all_claims(q, id1)
+
+        id2 = await make_job(q, concurrency = 1, tag = "foo")
+        await check_claim(q, id2)
+        await check_claim(q, id2, matchonly = True)
+        await check_all_claims(q, id1, id2)
+
+        # This job has no tag, so matchonly should ignore it
+        id3 = await make_job(q, concurrency = 1, nice = -1)
+        await check_claim(q, id3)
+        await check_claim(q, id2, matchonly = True)
+        await check_all_claims(q, id3, id1, id2)
+
+        # Ensure that NONE jobs aren't claimed, even when they have a matching tag
+        id4 = await make_job(q, type = model.JobType.NONE, tag = "foo", nice = -10, concurrency = 1)
+        await check_claim(q, id3)
+        await check_claim(q, id2, matchonly = True)
+        await check_all_claims(q, id3, id1, id2)
+        await check_all_claims(q, id4, type = model.JobType.NONE)
+
+        # Remove tag and see if id2 disappears from matchonly
+        await pipe.remove_tags("foo")
+        await check_claim(q, id3)
+        await check_claim(q, None, matchonly = True)
+        await check_all_claims(q, id3, id1, id2)
+
+@_test
+async def test_claiming(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests set_claim.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job = await make_job(q, concurrency = 1)
+        job2 = await make_job(q, concurrency = 1)
+        async def check_claim_count(expected1, expected2):
+            q = sqlalchemy.select(model.jobs.c.active_claims).where(model.jobs.c.job_id == job)
+            val = (await conn.execute(q)).first()[0]
+            q = sqlalchemy.select(model.jobs.c.active_claims).where(model.jobs.c.job_id == job2)
+            val2 = (await conn.execute(q)).first()[0]
+            assert (val, val2) == (expected1, expected2)
+
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0, 1)
+
+        await check_claim_count(0, 0)
+        await pipe._set_claim(0, job)
+        await check_claim_count(1, 0)
+        await pipe._set_claim(0, job2)
+        await check_claim_count(0, 1)
+        await pipe._set_claim(1, job)
+        await check_claim_count(1, 1)
+        await pipe._set_claim(0, job)
+        await check_claim_count(2, 0)
+        await pipe._set_claim(0, None)
+        await check_claim_count(1, 0)
+        await pipe._set_claim(0, None)
+        await check_claim_count(1, 0)
+        await pipe._set_claim(1, None)
+        await check_claim_count(0, 0)
+
+        with pytest.raises(db.NoSuchPipelineError):
+            await pipe._set_claim(2, job)
+
+@_test
+async def test_pipeline(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests basic pipeline lifecycle.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        # Create pipelines - one matchonly, one not
+        await q.create_pipeline("pipe", False, "password")
+        await q.create_pipeline("pipe_mo", True, "password")
+        # Register two slots for each
+        pipe = await q.pipeline("pipe", 0, 1)
+        pipe_mo = await q.pipeline("pipe_mo", 0, 1)
+        # Add a tag to both
+        await pipe.create_tags("tag")
+        await pipe_mo.create_tags("tag")
+
+        # ... Ok, time for some testing!
+        job1 = await make_job(q, concurrency = 3)
+        pageids = await make_pages(q, job1, "one", "two", "three", "four")
+        pages = []
+        pages.extend((
+            # one
+            await pipe.find_claim_page("", 0, model.JobType.BROZZLER),
+            # two
+            await pipe.find_claim_page("", 1, model.JobType.BROZZLER),
+            # None
+            await pipe_mo.find_claim_page("", 1, model.JobType.BROZZLER),
+        ))
+        await conn.execute(sqlalchemy.update(model.jobs).where(model.jobs.c.job_id == job1).values(tag = "tag"))
+        pages.extend((
+            # three
+            await pipe_mo.find_claim_page("", 1, model.JobType.BROZZLER),
+            # None (reached concurrency limit)
+            await pipe_mo.find_claim_page("", 0, model.JobType.BROZZLER),
+        ))
+        print(pages)
+        found_pages = [page.page_id if page else None for page in pages]
+        found_payloads = [page.payload if page else None for page in pages]
+        expected_pages = pageids[0:2] + [None, pageids[2], None]
+        expected_payloads = ["one", "two", None, "three", None]
+        assert found_pages == expected_pages
+        assert found_payloads == expected_payloads
+
+@_test
+async def test_retries(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests the retrying/finishing system.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0, 1)
+        job_id = await make_job(q, concurrency = 2)
+        await make_pages(q, job_id, "one", "two", "three", "four")
+
+        # Claim two pages, finish one of them
+        claim1 = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert claim1 and claim1.payload == "one"
+        claim2 = await pipe.find_claim_page("", 1, model.JobType.BROZZLER)
+        assert claim2 and claim2.payload == "two"
+        await pipe.finish_attempt(claim1.attempt_id)
+        # Claim a third page, fail it non-fatally. It should be returned to the queue
+        claim3 = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert claim3 and claim3.payload == "three"
+        # When it is returned to the queue it should have one try remaining
+        assert (await pipe.fail_attempt(claim3.attempt_id, "error", False)) == 1
+        # Claim a fourth page, failing it fatally
+        claim4 = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert claim4 and claim4.payload == "four"
+        # Should thus have no tries remaining
+        assert (await pipe.fail_attempt(claim4.attempt_id, "error", True)) == 0
+        # Ensure claim 3 was recycled back into the queue, and that max tries is taken into account.
+        claim3_2 = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert claim3_2 and claim3_2.payload == "three"
+        assert (await pipe.fail_attempt(claim3_2.attempt_id, "error", False)) == 0
+        with pytest.raises(db.JobExhausted):
+            await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+            # Ordinarily we would now recalculate the job status, but not in this test
+        # Ensure that adding retries manually works as intended
+        await q.retry_page(claim3_2.page_id, 1)
+        claim3_4 = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert claim3_4 and claim3_4.payload == "three"
+        assert (await pipe.fail_attempt(claim3_4.attempt_id, "error", False)) == 0
+        with pytest.raises(db.JobExhausted):
+            await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+
+async def check_job_status(queue: db.Connection, job_id, expected_status):
+    q = sqlalchemy.select(model.jobs.c.status).where(model.jobs.c.job_id == job_id)
+    res = (await queue.conn.execute(q)).first()
+    assert res and res[0] == expected_status
+
+@_test
+async def test_finishing(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests the update_job_status function.
+    """
+    async with engine.connect() as conn:
+        queue = db.Connection(conn)
+        await queue.create_pipeline("pipe", False, "password")
+        pipe = await queue.pipeline("pipe", 0, 1)
+        # Create two jobs with some pages
+        job1 = await make_job(queue, concurrency = 2)
+        await check_job_status(queue, job1, model.JobStatus.ACTIVE)
+        job2 = await make_job(queue, concurrency = 1)
+        await check_job_status(queue, job2, model.JobStatus.ACTIVE)
+        with pytest.raises(AssertionError):
+            await check_job_status(queue, job2, model.JobStatus.DRAINING)
+        await make_pages(queue, job1, "1one", "1two", "1three")
+        await make_pages(queue, job2, "2one")
+
+        # Start claiming from job 1
+        claim1_1 = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert claim1_1 and claim1_1.payload == "1one"
+        await pipe.finish_attempt(claim1_1.attempt_id)
+        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.ACTIVE
+        await check_job_status(queue, job1, model.JobStatus.ACTIVE)
+        # Fail page non-fatally
+        claim1_2 = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert claim1_2 and claim1_2.payload == "1two"
+        await pipe.fail_attempt(claim1_2.attempt_id, "", False)
+        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.ACTIVE
+        await check_job_status(queue, job1, model.JobStatus.ACTIVE)
+        # Claim third page but don't fail it yet
+        claim1_3 = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        # It should still be active...
+        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.ACTIVE
+        assert claim1_3 and claim1_3.payload == "1three"
+        # but if we reclaim the failed page, it should be DRAINING
+        claim1_2_2 = await pipe.find_claim_page("", 1, model.JobType.BROZZLER)
+        assert claim1_2_2 and claim1_2_2.payload == "1two"
+        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.DRAINING
+        # Same goes for if we finish one of them (but not both)
+        await pipe.fail_attempt(claim1_2_2.attempt_id, "", False)
+        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.DRAINING
+        await check_job_status(queue, job1, model.JobStatus.DRAINING)
+        # And if we finish the other, we're done :-)
+        await pipe.finish_attempt(claim1_3.attempt_id)
+        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.DONE
+        await check_job_status(queue, job1, model.JobStatus.DONE)
+
+        await check_job_status(queue, job2, model.JobStatus.ACTIVE)
+        claim2_1 = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert claim2_1 and claim2_1.payload == "2one"
+        await pipe.fail_attempt(claim2_1.attempt_id, "", True)
+        assert (await pipe.parent.update_job_status(job2)) == model.JobStatus.DONE
+        await check_job_status(queue, job2, model.JobStatus.DONE)
+
+        # Finally, adding more pages should make it ACTIVE again.
+        await make_pages(queue, job2, "hi")
+        assert (await pipe.parent.update_job_status(job2)) == model.JobStatus.ACTIVE
+
+@_test
+async def test_update_job_status_with_abort(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+        job1 = await make_job(q, concurrency = 1)
+        await make_pages(q, job1, "a")
+
+        await q.abort_job(job1)
+        assert (await pipe.find_claim_page("", 0, model.JobType.BROZZLER)) is None
+        assert (await q.update_job_status(job1) == model.JobStatus.ABORTED)
+        assert (await q.update_job_status(job1, True) == model.JobStatus.ACTIVE)
+        # Claim page, ensure it is be set to DRAINING
+        res = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert res and res.payload == "a"
+        await q.abort_job(job1)
+        assert (await q.update_job_status(job1) == model.JobStatus.ABORTED)
+        assert (await q.update_job_status(job1, True) == model.JobStatus.DRAINING)
+        await q.abort_job(job1)
+        await pipe.finish_attempt(res.attempt_id)
+        assert (await q.update_job_status(job1) == model.JobStatus.ABORTED)
+        assert (await q.update_job_status(job1, True) == model.JobStatus.DONE)
+
+@_test
+async def test_update_job_status_with_depth(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+
+        job1 = await make_job(q, concurrency = 1, depth = 0)
+        (a,) = await make_pages(q, job1, "a")
+        (b,) = await make_pages(q, job1, "b", parent_page = a)
+        assert (await q.update_job_status(job1)) == model.JobStatus.ACTIVE
+        claim = (await pipe.find_claim_page("", 0, model.JobType.BROZZLER))
+        assert claim and claim.page_id == a
+        assert (await q.update_job_status(job1)) == model.JobStatus.DRAINING
+        await pipe.finish_attempt(claim.attempt_id)
+        # At this point, there is still an item, but it is out of scope and so the job is done.
+        assert (await q.update_job_status(job1)) == model.JobStatus.DONE
+
+@_test
+async def test_update_job_status_with_skip(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+
+        job1 = await make_job(q, concurrency = 1)
+        await q.create_job_rule(job1, None, db.JobRule("", {"skip": True}))
+        await make_pages(q, job1, "foo")
+        # update_job_status will not be aware of the SKIP rule
+        assert (await q.update_job_status(job1)) == model.JobStatus.ACTIVE
+        # find_claim_page will be, though, and the claim will fail
+        try:
+            await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        except db.JobExhausted as e:
+            assert e.job_id == job1
+        else:
+            raise AssertionError("Exception not raised")
+        # Now that the page has been marked SKIPPED, update_job_status should function correctly
+        assert (await q.update_job_status(job1)) == model.JobStatus.DONE
+        assert (await pipe.find_claim_page("", 0, model.JobType.BROZZLER)) is None
+
+async def _get_job_depth(q, job_id, pipe):
+    res = await q.conn.execute(sqlalchemy.select(pipe.parent._job_depth(job_id)))
+    return res.first()
+
+async def _assert_eligible_jobs(pipe: db.Pipeline, job_id: model.UUID, expected_eligible: list, expected_ineligible: list):
+    """
+    Asserts that all jobs are considered eligible or ineligible. (The order of dequeuing is not checked.)
+    """
+    discovered_e = []
+    discovered_i = []
+    for page in expected_eligible:
+        res = await pipe._find_claimable_page(job_id, _page_id = page)
+        discovered_e.append(res.page_id if res else f"ineligible[{page}]")
+    for page in expected_ineligible:
+        res = await pipe._find_claimable_page(job_id, _page_id = page)
+        discovered_i.append(page if not res else f"eligible[{page}]")
+    assert discovered_e == expected_eligible
+    assert discovered_i == expected_ineligible
+
+async def _get_page_depths(pipe, *page_ids):
+    depths = []
+    for page_id in page_ids:
+        res = await pipe.parent.conn.execute(sqlalchemy.select(pipe.parent._page_depth(page_id)))
+        depths.append(res.first()[0])
+    return depths
+
+@_test
+async def test_depth_tracking(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests whether the relations system works as expected.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+
+        job1 = await make_job(q, concurrency = 1, depth = None)
+        root1, root2 = await make_pages(q, job1, "foo", "bar", parent_page = None)
+        page11 = (await make_pages(q, job1, "baz", parent_page = root1))[0]
+        page21, page22 = await make_pages(q, job1, "a", "b", parent_page = root2)
+
+        res = await _get_job_depth(q, job1, pipe)
+        assert res and res[0] is None
+        assert (await _get_page_depths(pipe, root1, root2, page11, page21, page22)) == [0, 0, 1, 1, 1]
+        await _assert_eligible_jobs(pipe, job1, [root1, root2, page11, page21, page22], [])
+        await conn.execute(sqlalchemy.update(model.jobs).where(model.jobs.c.job_id == job1).values(depth = -1))
+        res = await _get_job_depth(q, job1, pipe)
+        assert res and res[0] == -1
+        await _assert_eligible_jobs(pipe, job1, [], [root1, root2, page11, page21, page22])
+        with pytest.raises(AssertionError):
+            # Who tests the tests?
+            await _assert_eligible_jobs(pipe, job1, [root1], [root2, page11, page21, page22])
+        await conn.execute(sqlalchemy.update(model.jobs).where(model.jobs.c.job_id == job1).values(depth = 1))
+        await _assert_eligible_jobs(pipe, job1, [root1, root2, page11, page21, page22], [])
+        # Add new page of depth 2, which should be ineligible
+        (page211,) = await make_pages(q, job1, "c", parent_page = page21)
+        await _assert_eligible_jobs(pipe, job1, [root1, root2, page11, page21, page22], [page211])
+        assert (await _get_page_depths(pipe, page211)) == [2]
+        # Add new path for page211 of depth 1, which should make it eligible
+        page23, page24 = await make_pages(q, job1, "c", "d", parent_page = root2)
+        assert page23 == page211
+        assert (await _get_page_depths(pipe, page211, page24)) == [1, 1]
+        await _assert_eligible_jobs(pipe, job1, [root1, root2, page11, page21, page22, page23, page24], [])
+        # Add new path of depth 4, which should have no effect
+        (page2111,) = await make_pages(q, job1, "c", parent_page = page211)
+        assert page2111 == page23
+        assert (await _get_page_depths(pipe, page211)) == [1]
+        await _assert_eligible_jobs(pipe, job1, [root1, root2, page11, page21, page22, page23, page24], [])
+        # Add some cycles to ensure nothing hangs
+        (root1a,) = await make_pages(q, job1, "foo", parent_page = root1)
+        assert root1a == root1
+        assert (await _get_page_depths(pipe, root1)) == [0]
+        await _assert_eligible_jobs(pipe, job1, [root1, root2, page11, page21, page22, page23, page24], [])
+        (root1b,) = await make_pages(q, job1, "foo", parent_page = page11)
+        assert root1b == root1
+        assert (await _get_page_depths(pipe, root1)) == [0]
+        await _assert_eligible_jobs(pipe, job1, [root1, root2, page11, page21, page22, page23, page24], [])
+
+@_test
+async def test_attempt_id_to_job_id(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests whether attempt_id_to_job_id functions as expected.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+
+        job1 = await make_job(q, concurrency = 1)
+        await make_pages(q, job1, "item1")
+        cl = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert cl and (await pipe.parent.attempt_id_to_job_id(cl.attempt_id)) == (job1, tuple())
+        res2 = await pipe.parent.attempt_id_to_job_id(cl.attempt_id, [model.jobs.c.depth])
+        assert res2 == (job1, (None,))
+
+@_test
+async def test_compute_page_settings():
+    rules = [
+        db.JobRule(r"", {"accept": False}),
+        db.JobRule(r"^https?://hello\d\.very-good-quality-co\.de/", {"ua": "ua1"}),
+        db.JobRule(r"test", {"skip": True, "custom_js": "foo"}),
+        db.JobRule(r"aaa", {"custom_js": None, "accept": True}),
+    ]
+
+    tests = (
+        ("", db.PageSettings(accept = False)),
+        ("https://example.org", db.PageSettings(accept = False)),
+        ("https://hello4.very-good-quality-co.de/robots.txt", db.PageSettings(accept = False, ua = "ua1")),
+        ("https://hello6.very-good-quality-co.de/test", db.PageSettings(accept = False, ua = "ua1", skip = True, custom_js = "foo")),
+        ("http://example.com/aaa", db.PageSettings(accept = True)),
+        ("http://example.com/aaa/test", db.PageSettings(accept = True, skip = True)),
+    )
+    for url, expected in tests:
+        result = db.Connection.compute_page_settings(rules, url)
+        assert result == expected
+    with pytest.raises(AssertionError):
+        result = db.Connection.compute_page_settings(rules, "")
+        assert result == db.PageSettings(accept = True)
+
+@_test
+async def test_tag_rowcount(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests the return value in create_tags, remove_tags, and get_tags.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe")
+        async def create(expected, *tags):
+            # There doesn't currently seem to be an easy way to return this, so don't test it for now
+            await pipe.create_tags(*tags)
+
+        async def remove(expected, *tags):
+            r = await pipe.remove_tags(*tags)
+            assert r == expected
+
+        async def get(*expected):
+            r = await pipe.get_tags()
+            assert r == set(expected)
+
+        await get()
+        await create(2, "foo", "bar")
+        await get("foo", "bar")
+        await remove(2, "foo", "bar")
+        await get()
+        await create(2, "foo", "bar", "foo")
+        await remove(1, "foo", "foo", "baz")
+        await get("bar")
+        await create(2, "foo", "bar", "baz")
+        await get("foo", "bar", "baz")
+        await remove(3, "foo", "bar", "baz")
+        await get()
+
+@_test
+async def test_job_rule_insertion(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests create_job_rule and remove_job_rule.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+        job1 = await make_job(q)
+
+        # Create our job rules
+        _, r1 = await q.create_job_rule(job1, None, db.JobRule("^https?://", {"ua": "minimal", "custom_js": "foo"}))
+        _, r2 = await q.create_job_rule(job1, None, db.JobRule("^https?://example.org$", {"ua": "stealth"}))
+        rs3, r3 = await q.create_job_rule(job1, r2, db.JobRule("https?://", {"custom_js": "bar"}))
+        # Test ensure_ruleset, both valid and invalid
+        rs4, r4 = await q.create_job_rule(job1, r1, db.JobRule("", db.PageSettings(skip = True).as_dict()), ensure_ruleset = rs3)
+        with pytest.raises(db.RulesetConflict):
+            await q.create_job_rule(job1, None, db.JobRule("", {"custom_js": "baz"}), ensure_ruleset = rs3)
+        rs, rules = await q.get_job_ruleset(job1)
+        assert rs == rs4, "Ruleset ID changed unexpectedly!"
+        assert [rule.scope for rule in rules] == ["", "^https?://", "https?://", "^https?://example.org$"]
+
+        # Create some pages. No trailing slash, so r2 applies and ua will be stealth
+        await make_pages(q, job1, "http://example.org", "https://example.org")
+        # Ensure page settings are computed correctly
+        assert q.compute_page_settings(rules, "http://example.org") == db.PageSettings(ua = "stealth", custom_js = "bar", skip = True)
+        # Skip rule is in place, so no item should be dequeued
+        assert (await pipe._find_claimable_page(job1)) is None
+
+        # No more skip rule...
+        await q.remove_job_rule(job1, r4)
+        rs, rules = await q.get_job_ruleset(job1)
+        # Ensure the correct one (i.e. the empty regex) was removed, and that computed page settings change accordingly
+        assert [rule.scope for rule in rules] == ["^https?://", "https?://", "^https?://example.org$"]
+        assert q.compute_page_settings(rules, "http://example.org") == db.PageSettings(ua = "stealth", custom_js = "bar", skip = False)
+        # Queue some more pages, now with trailing slash (to prevent unique conflict)
+        (page1, page2) = await make_pages(q, job1, "https://example.org/", "http://example.org/")
+        info = await pipe._find_claimable_page(job1)
+        assert info == db.PendingPage(page1, "https://example.org/", rs, db.PageSettings(ua = "minimal", custom_js = "bar"))
+
+        rm1, oldval = await q.remove_job_rule(job1, 0)
+        assert oldval.scope == "^https?://"
+        rm2, oldval = await q.remove_job_rule(job1, 1, ensure_ruleset = rm1)
+        assert oldval.scope == "^https?://example.org$"
+        with pytest.raises(db.RulesetConflict):
+            await q.remove_job_rule(job1, 0, ensure_ruleset = rm1)
+        await q.remove_job_rule(job1, 0, ensure_ruleset = rm2)
+        rs, rules = await q.get_job_ruleset(job1)
+        assert rules == []
+
+        with pytest.raises(db.NoSuchThingError):
+            await q.create_job_rule(job1, 1000, db.JobRule("", {}))
+        with pytest.raises(db.NoSuchThingError):
+            await q.remove_job_rule(job1, 1000)
+
+@_test
+async def test_job_rule_removal_by_scope(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job1 = await make_job(q)
+
+        rs0, rules = await q.get_job_ruleset(job1)
+        assert rs0.int == 0
+        assert rules == []
+
+        rs1, idx = await q.create_job_rule(job1, None, db.JobRule("foo", {}), ensure_ruleset = rs0)
+        assert idx == 0
+        rs2, idx = await q.create_job_rule(job1, None, db.JobRule("bar", {}), ensure_ruleset = rs1)
+        assert idx == 1
+        rs3, idx = await q.create_job_rule(job1, None, db.JobRule("foo", {}))
+        assert idx == 2
+        rs4, idx = await q.create_job_rule(job1, None, db.JobRule("foo", {}))
+        assert idx == 3
+
+        with pytest.raises(db.RulesetConflict):
+            await q.create_job_rule(job1, None, db.JobRule("foo", {}), rs0)
+
+        rs4_, rules = await q.get_job_ruleset(job1)
+        assert rs4 == rs4_
+        assert rules == [db.JobRule("foo", {}), db.JobRule("bar", {}), db.JobRule("foo", {}), db.JobRule("foo", {})]
+
+        rs5, num_removed = await q.remove_job_rules_by_scope(job1, "foo", rs4)
+        assert num_removed == 3
+
+        rs5_, rules = await q.get_job_ruleset(job1)
+        assert rs5 == rs5_
+        assert rules == [db.JobRule("bar", {})]
+
+        with pytest.raises(db.RulesetConflict):
+            await q.remove_job_rules_by_scope(job1, "foo", rs4)
+
+        rs5__, num_removed = await q.remove_job_rules_by_scope(job1, "foo", rs5)
+        assert num_removed == 0
+        assert rs5__ == rs5
+
+        rs6, num_removed = await q.remove_job_rules_by_scope(job1, "bar", rs5)
+        assert num_removed == 1
+        rs6_, num_removed = await q.remove_job_rules_by_scope(job1, "bar", rs6)
+        assert num_removed == 0
+        assert rs6_ == rs6
+
+        rs6__, rules = await q.get_job_ruleset(job1)
+        assert rs6__ == rs6
+        assert rules == []
+
+@_test
+async def test_job_rule_edge_cases(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests some possible edge cases related to job rulesets.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job1 = await make_job(q)
+
+        id1, _ = await q.get_job_ruleset(job1)
+        assert id1 == model.UUID(int = 0)
+
+        # This ruleset is empty! Deletion shouldn't work.
+        with pytest.raises(db.NoSuchThingError):
+            await q.remove_job_rule(job1, 0, id1)
+
+        # Negative indexing probably shouldn't be allowed.
+        with pytest.raises(db.NoSuchThingError):
+            await q.create_job_rule(job1, -1, db.JobRule("", {}))
+        # Inserting at len(rules) to append is not supported.
+        with pytest.raises(db.NoSuchThingError):
+            await q.create_job_rule(job1, 0, db.JobRule("", {}))
+        # No writes have actually gone through, so the ID should remain unchanged.
+        id2, _ = await q.get_job_ruleset(job1)
+        assert id1 == id2
+        await q.create_job_rule(job1, None, db.JobRule("", {}))
+        # And check negative indexing when there *is* a rule, too.
+        with pytest.raises(db.NoSuchThingError):
+            await q.create_job_rule(job1, -1, db.JobRule("", {}))
+        with pytest.raises(db.NoSuchThingError):
+            await q.remove_job_rule(job1, -1)
+        # Removing len(rules) should definitely not work.
+        with pytest.raises(db.NoSuchThingError):
+            await q.remove_job_rule(job1, 1)
+
+        # Ensure that conflicts do not change the ID either.
+        id3, _ = await q.get_job_ruleset(job1)
+        with pytest.raises(db.RulesetConflict):
+            await q.create_job_rule(job1, None, db.JobRule("", {}), id1)
+        id4, _ = await q.get_job_ruleset(job1)
+        assert id3 == id4
+
+@_test
+async def test_ruleset_removal_order(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests that removing rules preserves the order of the other ones.
+    Kind of tested above, but this is a little more explicit.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job1 = await make_job(q, concurrency = 1)
+
+        for scope in ("foo", "removeme", "bar", "removeme", "baz", "quux"):
+            await q.create_job_rule(job1, None, db.JobRule(scope, {}))
+        await q.remove_job_rule(job1, 0)
+        await q.remove_job_rule(job1, 4)
+        _, rules = await q.get_job_ruleset(job1)
+        assert [rule.scope for rule in rules] == ["removeme", "bar", "removeme", "baz"]
+        await q.remove_job_rules_by_scope(job1, "removeme")
+        _, rules = await q.get_job_ruleset(job1)
+        assert [rule.scope for rule in rules] == ["bar", "baz"]
+
+@_test
+async def test_many_skipped_jobs(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job1 = await make_job(q, concurrency = 1)
+        await q.create_job_rule(job1, None, db.JobRule("^skipped_", {"skip": True, "custom_js": "foo"}))
+        await make_pages(q, job1, *[f"skipped_{i}" for i in range(100)], "hello")
+        await q.create_job_rule(job1, None, db.JobRule("", {"ua": "stealth", "accept": True}))
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+
+        claim = await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+        assert claim
+        assert claim.payload == "hello"
+        assert claim.settings == db.PageSettings(ua = "stealth", accept = True)
+        with pytest.raises(db.JobExhausted):
+            await pipe.find_claim_page("", 0, model.JobType.BROZZLER)
+
+@db._wrap_serialization_failure
+async def _commit(conn):
+    await conn.commit()
+
+@db._wrap_serialization_failure
+async def _execute(conn, q):
+    await conn.execute(q)
+
+@_test
+async def test_serializable_wrapper(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+            await conn.execute(sqlalchemy.insert(model.options).values(key = "hi", value = "bye"))
+            await conn.execute(sqlalchemy.insert(model.options).values(key = "bye", value = "hi"))
+            await conn.commit()
+    async with engine.connect() as conn1:
+        async with engine.connect() as conn2:
+            q1 = sqlalchemy.select(model.options.c.value).where(model.options.c.key == "hi")
+            q2 = sqlalchemy.update(model.options).where(model.options.c.value == "bye").values(value = "cye")
+            q3 = sqlalchemy.update(model.options).where(model.options.c.value == "hi").values(value = "dye")
+            await conn1.execute(q1)
+            await conn2.execute(q2)
+            await conn1.execute(q3)
+            await conn2.commit()
+            with pytest.raises(db.SerializationFailure):
+                await _commit(conn1)
+            await conn1.rollback()
+            with pytest.raises(sqlalchemy.exc.IntegrityError):
+                q1 = sqlalchemy.insert(model.options).values(key = "hi", value = "eye")
+                await _execute(conn1, q1)
+
+
+# Test result duplication checking
+# Test multiple of the same payload in create_page
+    # And the niceness update.
+# Test nonexistence errors.

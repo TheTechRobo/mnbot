@@ -25,6 +25,7 @@ services:
       RUE_DB_HOST: ${RUE_DB_HOST:-rethinkdb}
     extra_hosts:
       - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
+    network_mode: host
   tracker:
     build:
       context: ../tracker/server
@@ -43,6 +44,7 @@ services:
       - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
     ports:
       - 8897:8897
+    network_mode: host
   bot:
     build:
       context: ../tracker/irc
@@ -59,6 +61,7 @@ services:
         condition: service_completed_successfully
     extra_hosts:
       - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
+    network_mode: host
   dashboard:
     build:
       context: ../tracker/dashboard
@@ -74,3 +77,4 @@ services:
       - ${EXTRA_HOST:-aaa.internal:0.0.0.0}
     ports:
       - 8898:8898
+    network_mode: host

@@ -105,20 +105,24 @@ async def warcprox_cleanup():
         except Exception:
             pass
 
-async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ua: str, custom_js: typing.Optional[str], info_url: str):
-    tries = full_job['_current_attempt']
-    id = full_job['id']
+async def run_job(ws: Websocket, full_job: dict, info_url: str):
+    job_id = full_job['job_id']
+    page_id = full_job['page_id']
+    attempt_id = full_job['attempt_id']
+    assert "_" not in job_id
+    warc_prefix = "mnbot-brozzler-" + job_id.replace("-", "_")
     #dedup_bucket = f"dedup-{id}-{tries}"
     dedup_bucket = ""
-    stats_bucket = f"stats-{id}-{tries}"
+    stats_bucket = f"stats-{job_id}"
     job = Job(
+        attempt_id = attempt_id,
         full_job = full_job,
-        url = url,
+        url = full_job['payload'],
         warc_prefix = warc_prefix,
         dedup_bucket = dedup_bucket,
         stats_bucket = stats_bucket,
-        ua = ua,
-        custom_js = custom_js,
+        ua = full_job['settings']['ua'],
+        custom_js = full_job['settings']['custom_js'],
         cookie_jar = None,
         mnbot_info_url = info_url
     )
@@ -129,7 +133,10 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ua:
         PYTHON,
         os.path.join(os.path.dirname(sys.argv[0]), "browse.py"),
         str(pwrite),
-        id, # useful for ps
+        # These arguments are passed only because they are useful for ps
+        job_id,
+        page_id,
+        attempt_id,
         stdin = subprocess.PIPE,
         stdout = subprocess.PIPE,
         stderr = subprocess.STDOUT,
@@ -174,16 +181,8 @@ async def run_job(ws: Websocket, full_job: dict, url: str, warc_prefix: str, ua:
                         res = json.loads(res)
                         type = res['type']
                         payload = res['payload']
-                        if type in ("status_code", "outlinks", "final_url", "requisites", "custom_js"):
-                            await ws.store_result(id, type, tries, payload)
-                        elif type == "screenshot":
-                            # Don't tell the tracker to decode the thumbnail
-                            # if there isn't a thumbnail
-                            decode_fields = [k for k in ("full", "thumb") if payload[k]]
-                            await ws.store_result(id, type, tries, payload, decode_fields)
-                        elif type == "cjs_screenshot":
-                            decode_fields = ["full"]
-                            await ws.store_result(id, type, tries, payload, decode_fields)
+                        if type in ("status_code", "outlinks", "final_url", "requisites", "custom_js", "screenshot", "cjs_screenshot"):
+                            await ws.store_result(attempt_id, type, payload)
                         elif type == "error":
                             # Cancel tasks, since both stdout and pread are about to get closed.
                             # Failing to do this results in a "Task exception was never retrieved"
@@ -233,6 +232,7 @@ async def main():
                 pass
             await asyncio.sleep(15)
 
+    # Don't change this without changing the hardcoded slot=0 below and the hardcoded num_slots=1 in tracker.py.
     MAX_WORKERS = 1
     workers: dict[asyncio.Task, tuple[TaskType, dict | None]] = dict()
 
@@ -266,41 +266,36 @@ async def main():
                 logger.debug("not spinning up new item as we are pending a stop")
                 continue
             logger.debug("spinning up worker")
-            resp = await ws.claim_item()
+            resp = await ws.claim_item(0)
             if resp:
-                item, info_url = resp
-                id = item['id']
-                logger.info(f"Starting task {id}")
-                url = item['item']
-                assert "_" not in id
-                prefix = "mnbot-brozzler-" + id.replace("-", "_")
+                claim, info_url = resp
+                print(claim, info_url)
+                attempt_id = claim['attempt_id']
+                job_id = claim['job_id']
+                page_id = claim['page_id']
+                logger.info(f"Starting claim {attempt_id} (for {job_id} : {page_id}")
                 task = asyncio.create_task(run_job(
                     ws,
-                    item,
-                    url,
-                    prefix,
-                    item['metadata']['ua'],
-                    item['metadata']['custom_js'],
-                    info_url
+                    claim,
+                    info_url,
                 ))
-                task.set_name(id)
-                workers[task] = (TaskType.ITEM, item)
+                task.set_name(attempt_id)
+                workers[task] = (TaskType.ITEM, claim)
             else:
                 to_sleep = random.randint(10, 30)
-                logger.info(f"No items found, blocking this worker for {to_sleep} seconds.")
+                logger.info(f"No tasks found, blocking this worker for {to_sleep} seconds.")
                 task = asyncio.create_task(asyncio.sleep(to_sleep))
                 workers[task] = (TaskType.SLEEP, None)
         done: set[asyncio.Task] = (await asyncio.wait(workers, return_when = asyncio.FIRST_COMPLETED))[0]
         for finished_task in done:
             logger.debug(f"checking finished task {finished_task}")
-            task_type, item = workers[finished_task]
+            task_type, task_claim = workers[finished_task]
             del workers[finished_task]
             if task_type != TaskType.ITEM:
                 logger.debug("nevermind, not an item")
                 continue
-            # item can't be None at this point
-            id = item['id']
-            tries = item['_current_attempt']
+            # claim can't be None at this point
+            attempt_id = task_claim['attempt_id']
             try:
                 _dedup_bucket, _stats_bucket = finished_task.result()
             except Exception as e:
@@ -309,14 +304,14 @@ async def main():
                     fatal = e.fatal
                 else:
                     fatal = False
-                    logger.exception(f"failed task {id}:")
+                    logger.exception(f"failed task {attempt_id}:")
                     fmt = io.StringIO()
                     finished_task.print_stack(file = fmt)
                     message = f"Caught exception!\n{fmt.getvalue()}"
-                await ws.fail_item(id, message, tries, fatal)
+                await ws.fail_item(attempt_id, message, fatal)
             else:
                 logger.info(f"task {id} was successful!")
-                await ws.finish_item(id)
+                await ws.finish_item(attempt_id)
                 logger.debug("creating cleanup task")
                 task = asyncio.create_task(warcprox_cleanup())
                 workers[task] = (TaskType.CLEANUP, None)

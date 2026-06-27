@@ -1,0 +1,407 @@
+from quart import Quart, abort, redirect, render_template, render_template_string, request, url_for
+import werkzeug.exceptions
+import os
+import base64
+import dataclasses
+
+import sqlalchemy, sqlalchemy.ext.asyncio, sqlalchemy.dialects.postgresql
+
+from ..common import db, model
+
+class EscapingQuart(Quart):
+    def select_jinja_autoescape(self, filename: str) -> bool:
+        return (not filename) or filename.endswith(".j2") or super().select_jinja_autoescape(filename)
+
+app = EscapingQuart(__name__)
+app.jinja_env.globals.update(isinstance = isinstance)
+
+DOCUMENTATION_URL = os.getenv("DOCUMENTATION_URL")
+
+NAV = (
+    ("/", "Dashboard"),
+    #("/claims", "Claims"),
+    #("/pipelines", "Pipelines"),
+    ("/docs", "Documentation"),
+)
+
+async def _setup_engine():
+    global ENGINE
+    ENGINE = await db.create_engine()
+
+app.before_serving(_setup_engine)
+
+@dataclasses.dataclass
+class RulesetInfoPacket:
+    id: model.UUID
+    rules: list[db.JobRule]
+
+@dataclasses.dataclass
+class JobInfoPacket:
+    id: model.UUID
+    type: model.JobType
+    status: model.JobStatus
+    active_claims: list[str]
+    depth: int | None
+    concurrency: int
+    nice: int
+    tag: str | None
+    note: str | None
+    initial_page: str
+    ruleset: RulesetInfoPacket
+
+@dataclasses.dataclass
+class ResultsInfoPacket:
+    screenshot: model.UUID | None = None
+    cjs_screenshot: model.UUID | None = None
+    outlinks: list[str] | None = None
+    requisites: list | None = None
+    status_code: int | None = None
+    final_url: str | None = None
+
+@dataclasses.dataclass
+class AttemptInfoPacket:
+    id: model.UUID
+    page_id: model.UUID
+    pipeline_id: str
+    pipeline_version: str
+    error: str | None
+    finished: bool
+    ruleset: RulesetInfoPacket
+    applied_settings: db.PageSettings
+    results: ResultsInfoPacket
+
+@dataclasses.dataclass
+class PageInfoPacket:
+    id: model.UUID
+    job_id: model.UUID
+    url: str
+    status: model.PageStatus
+    attempts: int
+    attempts_remaining: int
+    nice: int
+
+    all_attempts: list[AttemptInfoPacket]
+
+@app.context_processor
+def aaa():
+    return {"nav": NAV, "len": len}
+
+@app.route("/")
+async def home():
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        q = (
+            sqlalchemy.select(model.jobs.c.job_id, model.jobs.c.initial_page, model.jobs.c.note)
+            .where(model.jobs.c.type == model.JobType.BROZZLER)
+            .where(model.jobs.c.status.in_((model.JobStatus.ACTIVE, model.JobStatus.DRAINING)))
+            .order_by(*model.jobs_dequeue_order)
+        )
+        active_jobs = (await conn.execute(q)).all()
+    return await render_template("home.j2", jobs = active_jobs)
+
+@app.route("/docs")
+async def docs():
+    if DOCUMENTATION_URL:
+        return redirect(DOCUMENTATION_URL, 302)
+    return await render_template("error.j2", reason = "No documentation URL", description = "The DOCUMENTATION_URL environment variable was not set. Please report this!"), 500
+
+@app.route("/item/translate")
+async def translate_form_input():
+    if "item" not in request.args:
+        abort(400)
+    id = request.args['item']
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        q = sqlalchemy.select(
+            sqlalchemy.exists(sqlalchemy.select(model.jobs).where(model.jobs.c.job_id == id)),
+            sqlalchemy.exists(sqlalchemy.select(model.pages).where(model.pages.c.page_id == id))
+        )
+        res = await conn.execute(q)
+        is_job, is_page = res.one()
+    if is_job:
+        if is_page:
+            return await render_template("error.j2", reason = "Ambiguous ID", description = "The ID you provided was found as both a job ID and a page ID. Please report this!"), 500
+        return redirect(url_for("single_job", job_id = id))
+    elif is_page:
+        return redirect(url_for("single_page", page_id = id))
+    return await render_template("error.j2", reason = "No such ID", description = "No job or page was found with the provided ID."), 404
+
+def route_with_json(route, **kwargs):
+    """
+    Adds app.route for route and route + ".json".
+    The callback should take an argument called html, which indicates whether or not to return HTML.
+    """
+    assert "defaults" not in kwargs
+    def inner(cb):
+        html_cb = app.route(
+            route,
+            defaults = {"html": True},
+            **kwargs
+        )(cb)
+        return app.route(
+            route + ".json",
+            defaults = {"html": False},
+            **kwargs
+        )(html_cb)
+    return inner
+
+@route_with_json("/claims")
+async def claims(html):
+    claims = QUEUE.claimed()
+    if html:
+        return await render_template("pending.j2", pending = claims, adj = "Claimed")
+    claims = []
+    async for item in QUEUE.claimed():
+        claims.append(item)
+    return {"status": 200, "claims": claims}
+
+@route_with_json("/page/<page_id>")
+async def single_page(page_id, html):
+    q = sqlalchemy.select(model.pages).where(model.pages.c.page_id == page_id)
+    attempt_q = (
+        sqlalchemy.select(model.attempts, model.job_rulesets.c.rules)
+        .select_from(model.attempts)
+        .join(model.job_rulesets, model.attempts.c.ruleset_id == model.job_rulesets.c.job_ruleset_id)
+        .where(model.attempts.c.page_id == page_id)
+    )
+
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        res = await conn.execute(q)
+        row = res.one_or_none()
+        if row is None:
+            if html:
+                return await render_template("error.j2", reason = f"Page ID {page_id} not found", description = f"No page with this ID exists.", show_item_search = True), 404
+            return {"status": 404, "message": "Page ID not found"}, 404
+        page_packet = PageInfoPacket(page_id, row.job_id, row.payload, row.status, row.attempts, row.attempts_remaining, row.nice, [])
+
+        attempts_res = await conn.execute(attempt_q)
+        for row in attempts_res:
+            # TODO: Flatten this into the attempt_q query.
+            results_q = sqlalchemy.select(model.results).where(model.results.c.attempt_id == row.attempt_id)
+            results_r = await conn.execute(results_q)
+            results = ResultsInfoPacket()
+            for result in results_r:
+                match result.type:
+                    case model.ResultType.CUSTOM_JS_SCREENSHOT:
+                        results.cjs_screenshot = result.result_id
+                    case model.ResultType.FINAL_URL:
+                        results.final_url = result.payload
+                    case model.ResultType.OUTLINKS:
+                        results.outlinks = result.payload
+                    case model.ResultType.REQUISITES:
+                        results.requisites = result.payload
+                    case model.ResultType.SCREENSHOT:
+                        results.screenshot = result.result_id
+                    case model.ResultType.STATUS_CODE:
+                        results.status_code = result.payload
+            rules = [db.JobRule(*i) for i in row.rules]
+            applied_settings = db.Connection.compute_page_settings(rules, page_packet.url)
+            page_packet.all_attempts.append(AttemptInfoPacket(
+                id = row.attempt_id,
+                page_id = page_id,
+                pipeline_id = row.pipeline_id,
+                pipeline_version = row.pipeline_version,
+                error = row.error,
+                finished = row.finished,
+                ruleset = RulesetInfoPacket(row.ruleset_id, rules),
+                applied_settings = applied_settings,
+                results = results,
+            ))
+    if html:
+        return await render_template("page.j2", page = page_packet)
+    v = dataclasses.asdict(page_packet)
+    v['status'] = v['status'].name
+    return {"status": 200, "page": v}
+
+@route_with_json("/job/<job_id>")
+async def single_job(job_id, html):
+    claim_q = (
+        sqlalchemy.select(sqlalchemy.dialects.postgresql.array_agg(sqlalchemy.text("claims.*")))
+        .where(model.claims.c.job_id == job_id)
+        .scalar_subquery()
+    )
+    ruleset_q = (
+        sqlalchemy.select(model.job_rulesets.c.job_ruleset_id, model.job_rulesets.c.rules)
+        .where(model.job_rulesets.c.job_id == job_id)
+        .order_by(model.job_rulesets.c.job_ruleset_id.desc())
+        .limit(1)
+        .subquery()
+    )
+
+    q = (
+        sqlalchemy.select(
+            model.jobs,
+            claim_q.label("all_claims"),
+            ruleset_q.c.job_ruleset_id,
+            ruleset_q.c.rules,
+        )
+        .select_from(model.jobs)
+        .where(model.jobs.c.job_id == job_id)
+        .join(ruleset_q, sqlalchemy.true(), isouter = True)
+    )
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        res = await conn.execute(q)
+        row = res.one_or_none()
+        if row is None:
+            if html:
+                return await render_template("error.j2", reason = f"Job ID {job_id} not found", description = "No job with this ID exists.", show_item_search = True), 404
+            return {"status": 404, "message": "Job ID not found"}, 404
+        ruleset = RulesetInfoPacket(row.job_ruleset_id, [db.JobRule(*rule) for rule in row.rules])
+        packet = JobInfoPacket(
+            id = row.job_id,
+            type = row.type,
+            status = row.status,
+            depth = row.depth,
+            concurrency = row.concurrency,
+            nice = row.nice,
+            tag = row.tag,
+            note = row.note,
+            initial_page = row.initial_page,
+            ruleset = ruleset,
+            active_claims = row.all_claims or [],
+        )
+    if html:
+        return await render_template("job.j2", job = packet)
+    v = dataclasses.asdict(packet)
+    v['status'] = v['status'].name
+    v['type'] = v['type'].name
+    return {"status": 200, "job": v}
+
+async def pages_list(q, html, job_id, volatile = True, use_status = False):
+    page_size = 10
+    try:
+        offset = int(request.args.get("offset", 0))
+        assert offset >= 0
+    except (ValueError, AssertionError):
+        if html:
+            return await render_template("error.j2", reason = "Bad request", description = "Offset parameter was invalid."), 400
+        return {"status": 400, "error": "Offset parameter was invalid."}
+    q = q.offset(offset).limit(page_size)
+
+    rows = []
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        res = await conn.stream(q)
+        async for row in res:
+            if use_status:
+                page_id, payload, status, remaining = row
+                rows.append(dict(page_id = page_id, payload = payload, status = status.name, remaining = remaining))
+            else:
+                page_id, payload, attempt_count = row
+                rows.append(dict(page_id = page_id, payload = payload, attempt_count = attempt_count))
+
+    next_offset = None
+    prev_offset = max(offset - page_size, 0) if offset > 0 else None
+    if len(rows) >= page_size:
+        next_offset = offset + page_size
+    if html:
+        return await render_template("pages.j2", rows = rows, offset = offset, next_offset = next_offset, prev_offset = prev_offset, job_id = job_id, volatile = volatile, use_status = use_status)
+    return {"status": 200, "rows": rows, "next": next_offset, "prev": prev_offset}
+
+@route_with_json("/job/<job_id>/pending")
+async def job_pending(job_id, html):
+    q = (
+        sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, sqlalchemy.func.count(model.attempts.c.page_id))
+        .select_from(model.pages)
+        .join(model.attempts, model.attempts.c.page_id == model.pages.c.page_id, isouter = True)
+        .where(model.pages.c.job_id == job_id)
+        .where(model.pages_dequeue_filter)
+        .group_by(model.pages.c.page_id)
+        .order_by(*model.pages_dequeue_order)
+    )
+    return await pages_list(q, html, job_id)
+
+@route_with_json("/job/<job_id>/claimed")
+async def job_claimed(job_id, html):
+    q = (
+        sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, sqlalchemy.func.count(model.attempts.c.page_id))
+        .select_from(model.pages)
+        .join(model.attempts, model.attempts.c.page_id == model.pages.c.page_id, isouter = True)
+        .where(model.pages.c.job_id == job_id)
+        .where(model.pages.c.status == model.PageStatus.CLAIMED)
+        .group_by(model.pages.c.page_id)
+        .order_by(*model.pages_dequeue_order)
+    )
+    return await pages_list(q, html, job_id)
+
+@route_with_json("/job/<job_id>/pages")
+async def job_pages(job_id, html):
+    q = (
+        sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, model.pages.c.status, model.pages.c.attempts_remaining)
+        .select_from(model.pages)
+        .where(model.pages.c.job_id == job_id)
+        .order_by(model.pages.c.page_id)
+    )
+    return await pages_list(q, html, job_id, volatile = False, use_status = True)
+
+@route_with_json("/ruleset/<job_id>/<ruleset_id>/test")
+async def test_ruleset(job_id, ruleset_id, html):
+    url = request.args['url']
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        queue = db.Connection(conn)
+        latest_ruleset = (await queue.get_job_ruleset(job_id))[0]
+        warning = "<b>Warning: You are not querying the latest ruleset.</b><br />" if str(latest_ruleset) != ruleset_id else ""
+        ruleset = await queue.get_ruleset(ruleset_id)
+        settings = queue.compute_page_settings(ruleset, url)
+    if html:
+        return await render_template_string(
+            '{{ warning|safe }} URL: <code>{{ url }}</code> <br /> {% import "macros.j2" as macros %} {{ macros.build_settings(settings) }}',
+            settings = settings,
+            url = url,
+            warning = warning,
+        )
+    return {"status": 200, "settings": settings}
+
+@app.route("/item/<id>/requisites")
+async def requisites(id):
+    item = await QUEUE.get(id)
+    if not item:
+        return "", {"content-type": "text/plain"}
+    return get_requisites(item), {"content-type": "text/plain"}
+
+async def get_requisites(item):
+    async for result in QUEUE.get_results(item):
+        if result.type == "requisites":
+            for requisite in result.data:
+                for entry in requisite['chain']:
+                    if req := entry['request']:
+                        if req['url'].startswith("http"):
+                            yield req['url'] + "\n"
+    yield "\nEOF"
+
+@app.route("/item/<id>/outlinks")
+async def outlinks(id):
+    item = await QUEUE.get(id)
+    if not item:
+        return "", {"content-type": "text/plain"}
+    return get_outlinks(item), {"content-type": "text/plain"}
+
+async def get_outlinks(item):
+    async for result in QUEUE.get_results(item):
+        if result.type == "outlinks":
+            for outlink in result.data:
+                if outlink.startswith("http"):
+                    yield outlink + "\n"
+    yield "\nEOF"
+
+@app.route("/screenshot/<id>/full.jpg")
+@app.route("/screenshot/<id>/thumb.jpg")
+@app.route("/screenshot/<id>.jpg")
+async def screenshot(id):
+    q = sqlalchemy.select(model.results.c.payload).where(model.results.c.result_id == id)
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        res = await conn.scalar(q)
+    if not res:
+        return await render_template("error.j2", code = 404, reason = "Screenshot not found", description = "Screenshot was not found.")
+    return base64.b85decode(res), {"Content-Type": "image/jpeg"}
+
+@app.errorhandler(werkzeug.exceptions.HTTPException)
+async def error(e: werkzeug.exceptions.HTTPException):
+    if request.accept_mimetypes.accept_json:
+        return await render_template("error.j2", code = e.code, reason = e.name, description = e.description), e.code
+    return {"status": e.code, "message": f"{e.name}: {e.description}"}, e.code
+

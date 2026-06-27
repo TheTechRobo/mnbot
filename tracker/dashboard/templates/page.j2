@@ -1,0 +1,185 @@
+{% extends "skeleton.j2" %}
+
+{% block title %} Page {{ page.id }} ({{ page.url }}) {% endblock %}
+
+{% block content %}
+{% set status = page.status.name %}
+
+<nav aria-label="breadcrumb">
+	<ul>
+		<li><a href="{{ url_for('single_job', job_id = page.job_id) }}">Job {{ page.job_id }}</a></li>
+		<li>Page {{ page.id }}</li>
+	</ul>
+</nav>
+
+<h3><a href="{{ page.url }}" rel="nofollow">{{ page.url }}</a></h3>
+
+<section aria-keyshortcuts="d" id="pagemeta" tabindex="-1">
+	<ul>
+		<li>Page status: {{ macros.page_status(page.status.name, page.attempts_remaining) }}</li>
+		<li><span data-tooltip="Lower nice values are run first.">Nice</span>: {{ page.nice }} (effective {{ page.nice + page.attempts }})</li>
+		<li>Tries remaining: {{ page.attempts_remaining }} <span>({{ page.attempts }} attempts since last reset)</span></li>
+	</ul>
+</section>
+
+<section id="results" aria-keyshortcuts="r" tabindex="-1">
+	<h3><span class="shortcut">R</span>esults</h3>
+	{% if page.all_attempts %}
+		{% for attempt in page.all_attempts if attempt.finished %}
+			<p>
+				<b>
+					<span {% if attempt.error %} class="error" {% endif %}>
+						Attempt {{ attempt.id }}
+					</span>
+					(on pipeline {{ attempt.pipeline }} {{ attempt.pipeline_version }})
+				</b>
+			</p>
+			<ul>
+				<li class="res-settings">
+					<b>Applied settings: </b>
+					{{ macros.build_settings(attempt.applied_settings) }}
+				</li>
+				{% if attempt.error %}
+					<li>
+						<details>
+							<summary>
+								<b class="error">Error: </b>
+								<code>{{ attempt.error.split('\n')[0].strip() }}</code>
+							</summary>
+							<pre>{{ attempt.error }}</pre>
+						</details>
+					</li>
+				{% endif %}
+				<li>
+					<b>Status code: </b>{{ attempt.results.status_code }}
+				</li>
+				<li>
+					<b>Final URL: </b>{{ attempt.results.final_url }}
+				</li>
+				<li class="res-screenshot">
+					<b>Screenshot: </b>
+					<br />
+					{% if attempt.results.screenshot %}
+						<a href="{{ url_for('screenshot', id = attempt.results.screenshot) }}">
+							<img class="thumb" src="{{ url_for('screenshot', id = attempt.results.screenshot) }}" alt="Page screenshot" />
+							<br />
+							<small>Click to enlarge image</small>
+						</a>
+					{% else %}
+						<em>No screenshot was recorded.</em>
+					{% endif %}
+				</li>
+				{% if attempt.results.cjs_screenshot %}
+					<li class="res-cscreenshot">
+						<b>Custom JS screenshot: </b>
+						<br />
+						<a href="{{ url_for('screenshot', id = attempt.results.cjs_screenshot) }}">
+							<img class="thumb" src="{{ url_for('screenshot', id = attempt.results.cjs_screenshot) }}" alt="Page screenshot" />
+							<br />
+							<small>Click to enlarge image</small>
+						</a>
+					</li>
+				{% endif %}
+				<li class="res-outlinks">
+					{% if attempt.results.outlinks %}
+						<details>
+							<summary>
+								<b>Discovered outlinks: </b>
+							</summary>
+							<ul>
+								{% for outlink in attempt.results.outlinks %}
+									<li>
+										<a href="{{ outlink }}" rel="nofollow">
+											<code>{{ outlink }}</code>
+										</a>
+									</li>
+								{% endfor %}
+							</ul>
+						</details>
+					{% else %}
+						<b>Discovered outlinks: </b>
+						<br />
+						<em>No outlinks were recorded.</em>
+					{% endif %}
+				</li>
+				<li class="res-requisites">
+					<details>
+						<summary><b>Requisites:</b></summary>
+						<div class="overflow-auto">
+							<table class="striped">
+								<tr>
+									<th>Status</th>
+									<th>Type</th>
+									<th>Category</th>
+									<th>Length</th>
+									<th>Method</th>
+									<th>URL</th>
+								</tr>
+								{% for requisite in attempt.results.requisites %}
+									{% for pair in requisite['chain'] %}
+										<tr>
+											{% if pair.response._type == "Response" %}
+												<td>{{ pair.response.status[0] }} {{ pair.response.status[1] }}</td>
+												<td>{{ pair.response.mimetype or "-" }}</td>
+											{% elif pair.response._type == "Error" %}
+												<td>Error</td>
+												<td>{{ pair.response.text }}</td>
+											{% elif pair.response is none %}
+												<td>None</td>
+												<td>No response</td>
+											{% else %}
+												<td>Unknown - this is a bug</td>
+												<td></td>
+											{% endif %}
+											{% if loop.first %}
+												<td>{{ pair.request.category }}</td>
+											{% else %}
+												<td>Redirect &uarr;</td>
+											{% endif %}
+											{% if pair.response.length is none %}
+												<td>?</td>
+											{% elif pair.response.length is not defined %}
+												<td>n/a</td>
+											{% else %}
+												<td>{{ pair.response.length }}</td>
+											{% endif %}
+											<td>{{ pair.request.method }}</td>
+											<td>
+												<a href="{{ pair.request.url }}">
+													{{ pair.request.url }}
+												</a>
+											</td>
+										</tr>
+									{% endfor %}
+								{% endfor %}
+							</table>
+						</div>
+					</details>
+				</li>
+			</ul>
+		{% endfor %}
+		{% for attempt in page.all_attempts if not attempt.finished %}
+			<p>Attempt {{ attempt.id }} has not been completed.</p>
+		{% endfor %}
+	{% else %}
+		<p>This item has not been tried yet.</p>
+	{% endif %}
+</section>
+
+{#
+<section id="upload" aria-keyshortcuts="u" tabindex="-1">
+	<h3><span class="shortcut">U</span>ploads</h3>
+	<!-- <p>Item {{ item.id }} has not yet been uploaded to IA. Uploading may take up to a day. If it is still not uploaded after that, please contact an admin.</p> -->
+	<p>Upload indexing is currently not implemented.</p>
+</section>
+#}
+
+<script>
+SHORTCUTS.d = "pagemeta";
+SHORTCUTS.r = "results";
+SHORTCUTS.u = "upload";
+</script>
+
+{% include "components/item-search.j2" %}
+
+{% endblock %}

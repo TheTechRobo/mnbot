@@ -1,0 +1,144 @@
+{% extends "skeleton.j2" %}
+
+{% block title %} Job {{ job.id }} ({{ job.initial_page }}) {% endblock %}
+
+{% block content %}
+
+<h2>Job {{ job.id }}</h2>
+
+{% set status = job.status.name %}
+<section aria-keyshortcuts="d" id="item" tabindex="-1">
+	<h3>Job <span class="shortcut">d</span>ata</h3>
+	<ul>
+		<li><b>Initial URL: </b><a href="{{ job.initial_page }}" rel="nofollow">{{ job.initial_page }}</a></li>
+		<li><b>Job status: </b>
+			<span {% if status == "DRAINING" %} data-tooltip="The queue is empty, but some in-progress pages remain." {% endif %}>
+				{{ status }}
+			</span>
+		</li>
+		<li><b data-tooltip="Lower nice values are run first.">Nice: </b>{{ job.nice }}</li>
+		<li><b>Created at: </b></li>
+		<li><b>Max depth: </b>{{ job.depth }}</li>
+		<li><b>Max concurrency: </b>{{ job.concurrency }} ({{ job.active_claims|length }} active claims)</li>
+		{% if job.explanation %}
+			<li><b>Explanation: </b>{{ job.explanation }}</li>
+		{% endif %}
+		{% if job.tag %}
+			<li>
+				<b><span data-tooltip="This job will only run on pipelines with this tag.">Tag constraint</span>: </b>
+				{{ job.tag }} (<a href="{{ url_for('pipelines') }}?tag={{ job.tag }}">list</a>)
+			</li>
+		{% endif %}
+		{% if job.active_claims %}
+			<li><b>Active claims: </b>{{ job.active_claims | map(attribute = "pipeline_id") | join(",") }}</li>
+		{% else %}
+			<li>Currently unclaimed.</li>
+		{% endif %}
+	</ul>
+</section>
+
+<section id="settings" aria-keyshortcuts="s" tabindex="-1">
+	<h3><span class="shortcut">S</span>ettings</h3>
+	<p>Job rules are applied in order. The last instance of a setting wins.</p>
+	<p>For more information about the job rules system, see <a href="/docs">the documentation</a>.</p>
+	<ul>
+		{% for rule in job.ruleset.rules %}
+			<li>
+				{% if rule.scope == "" %}
+					<b>Base rule</b> (applies to all pages; index {{ loop.index0 }}):
+				{% else %}
+					All pages matching <code>{{ rule.scope }}</code> (index {{ loop.index0 }}):
+				{% endif %}
+				{{ macros.build_settings(rule.payload) }}
+			</li>
+		{% endfor %}
+	</ul>
+	<p>(Ruleset ID: {{ job.ruleset.id }})</p>
+	<article id="ruletester">
+		<h4>Rule tester</h4>
+		<p>
+			You can test how a particular URL will be handled with this tool.
+			The job rules system uses the Python <a href="https://pypi.org/project/regex">regex</a> module with the default settings.
+			For accurate results, ensure you use the full URL (including e.g. protocol).
+		</p>
+		<p>
+			<small>Currently-loaded ruleset ID: {{ job.ruleset.id }}</small>
+		</p>
+		<form onsubmit="return false;" id="ruletester">
+			<fieldset role="group">
+				<input id="rsid" name="rs" type="hidden" value="{{ job.ruleset.id }}" />
+				<input name="url" id="rsurl" placeholder="URL" />
+				<input type="submit" value="Calculate" id="ruletester-btn" />
+			</fieldset>
+		</form>
+		<div id="ruletester-result"></div>
+		<noscript>(Sorry JAA, but this requires JavaScript.)</noscript>
+	</article>
+</section>
+
+<section id="pages">
+	<h3><span class="shortcut">P</span>ages</h3>
+	<section id="claimed">
+		<h4>Claimed Pages</h4>
+		<iframe src="{{ url_for('job_claimed', job_id = job.id) }}" style="width: 100%" height=400>
+			Your browser does not support iframes.
+		</iframe>
+	</section>
+	<section id="pending">
+		<h4>Pending Pages</h4>
+		<iframe src="{{ url_for('job_pending', job_id = job.id) }}" style="width: 100%" height=400>
+			Your browser does not support iframes.
+		</iframe>
+	</section>
+	<section id="all">
+		<h4>All Pages</h4>
+		<a href="{{ url_for('job_pages', job_id = job.id) }}">List all pages</a> (in order of creation)
+	</section>
+</section>
+
+{#
+<section id="upload" aria-keyshortcuts="u" tabindex="-1">
+	<h3><span class="shortcut">U</span>ploads</h3>
+	<!-- <p>Item {{ item.id }} has not yet been uploaded to IA. Uploading may take up to a day. If it is still not uploaded after that, please contact an admin.</p> -->
+	<p>Upload indexing is currently not implemented.</p>
+</section>
+#}
+
+<script>
+SHORTCUTS.d = "item";
+SHORTCUTS.s = "settings";
+SHORTCUTS.r = "results";
+SHORTCUTS.u = "upload";
+SHORTCUTS.p = "pages";
+
+const rsid = document.getElementById("rsid");
+const rsres = document.getElementById("ruletester-result");
+const rsbtn = document.getElementById("ruletester-btn");
+const rsurl = document.getElementById("rsurl");
+
+document.getElementById("ruletester").onsubmit = (e) => {
+	rsres.innerHTML = "<span aria-busy=true>Loading...</span>";
+	const rulesetId = rsid.value;
+
+	const params = new URLSearchParams();
+	params.append("url", rsurl.value);
+	const resp = fetch(`/ruleset/{{ job.id }}/${rulesetId}/test?${params}`)
+		.then( (res) => {
+			if (res.status !== 200) {
+				throw new Error(`Bad status code! ${res.status}`);
+			}
+			return res.text();
+		})
+		.then( (text) => {
+			rsres.innerHTML = text;
+		})
+		.catch( (e) => {
+			console.log("ruleset tester exception raised!", e);
+			rsres.innerHTML = "An error occured! Check console for details.";
+		});
+}
+</script>
+
+{% include "components/item-search.j2" %}
+
+{% endblock %}

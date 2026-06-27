@@ -7,7 +7,7 @@ logging.basicConfig(format = "%(asctime)s %(levelname)s <:%(thread)s> : %(messag
 # Update this whenever you make a change, cosmetic or not.
 # During development you can ignore it, but when you actually
 # push it to prod, it *must* be updated.
-VERSION = "20260412.01"
+VERSION = "20260626.01"
 
 DEBUG = os.environ.get("DEBUG") == "1"
 if DEBUG:
@@ -19,6 +19,7 @@ PROXY_URL = "warcprox:8000"
 @dataclasses.dataclass
 class Job:
     full_job: dict
+    attempt_id: str
     url: str
     warc_prefix: str
     dedup_bucket: str

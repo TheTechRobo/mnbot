@@ -1,0 +1,60 @@
+{% macro build_ua(ua) %}
+	{% if ua == "default" %} <span data-tooltip="Pretends to be Chrome on Windows, and adds information about mnbot.">Default</span>
+	{% elif ua == "stealth" %} <span data-tooltip="Pretends to be Chrome on Windows, without mnbot.">Stealth</span>
+	{% elif ua == "minimal" %} <span data-tooltip="Includes only information about mnbot.">Minimal</span>
+	{% elif ua == "googlebot" %} <span data-tooltip="Pretends to be Googlebot Desktop.">Googlebot Desktop</span>
+	{% elif ua.startswith("$") %} <code>{{ ua[1:] }}</code>
+	{% endif %}
+{% endmacro %}
+
+{% macro build_settings(settings) %}
+	<ul>
+		{% if settings.ua is defined %}
+			<li><b>User agent: </b>{{ build_ua(settings.ua) }}</li>
+		{% endif %}
+		{% if settings.custom_js is defined %}
+			{% if settings.custom_js %}
+				<li>
+					<details style="display: block; margin:0">
+						<summary><b>Custom JavaScript: </b>Click to show</summary>
+						<pre>{{ settings.custom_js }}</pre>
+					</details>
+				</li>
+			{% else %}
+				<li><b>Custom JavaScript: </b>None</li>
+			{% endif %}
+		{% endif %}
+		{% if settings.skip is defined %}
+			{% if settings.skip %}
+				<li><b data-tooltip="Instead of dequeuing this page, its status will be changed to SKIPPED.">Skip this page</b></li>
+			{% else %}
+				<li>Do not skip this page</li>
+			{% endif %}
+		{% endif %}
+		{% if settings.accept is defined %}
+			<li><span data-tooltip="NB: This has no effect for pages already in the queue.">
+				{% if settings.accept %}
+					Accept this URL into the queue
+				{% else %}
+					Reject this URL from the queue
+				{% endif %}
+			</span></li>
+		{% endif %}
+	</ul>
+{% endmacro %}
+
+{% macro page_status(status, attempts_remaining) %}
+	{% if status == "DRAINING" %}
+		<span data-tooltip="The queue is empty, but some in-progress pages remain.">
+			DRAINING
+		</span>
+	{% elif status == "READY" %}
+		{% if not attempts_remaining %}
+			COMPLETED
+		{% else %}
+			TODO
+		{% endif %}
+	{% else %}
+		{{ status }}
+	{% endif %}
+{% endmacro %}

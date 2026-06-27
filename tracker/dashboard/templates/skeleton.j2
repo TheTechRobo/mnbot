@@ -1,10 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 	<head>
+		{% import "macros.j2" as macros %}
 		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
 		<link rel="stylesheet" href="/static/styles.css" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title> {% block title %} why do they call it oven when you of in the cold food of out hot eat the food {% endblock %} | mnbot</title>
+		<title> {% block title %} Define the title block! {% endblock %} | mnbot</title>
 		<script>
 			// Mapping of key name to either element to focus or function to run
 			const SHORTCUTS = {};
@@ -18,19 +19,52 @@
 			});
 			document.addEventListener("keyup", (event) => {
 				const key = event.key.toLowerCase();
-				if (Object.hasOwn(SHORTCUTS, key)) {
-					const handler = SHORTCUTS[key];
-					if (typeof handler === "string") {
-						document.getElementById(handler).focus();
-						document.getElementById(handler).scrollIntoView();
-					} else {
-						SHORTCUTS[key](event);
+				// Send key event to parent window (which may simply by the current window).
+				// Handled in the message listener.
+				window.parent.postMessage(JSON.stringify({type: "key", key: key}));
+			});
+
+			// Solution adapted from https://developer.mozilla.org/en-US/docs/Web/API/HTMLIFrameElement/contentWindow#mapping_message_sources_to_iframes
+			let iframes = [];
+			window.addEventListener("load", (e) => {
+				iframes = Array.from(document.querySelectorAll("iframe"));
+				iframes.forEach( (f) => f.contentWindow.postMessage("ready") );
+			});
+
+			window.addEventListener("message", (e) => {
+				if (e.data === "ready" && window.parent !== window) {
+					window.parent.postMessage(JSON.stringify({type: "contentHeight", height: document.body.scrollHeight + 10}));
+					return;
+				}
+				const msg = JSON.parse(e.data);
+				// Note: this doesn't currently play nicely with nested iframes, so if those ever
+				// start being used (God help you) this will need to be adjusted.
+
+				if (msg.type === "key") {
+					// Allow iframes to tell us their keyUp events.
+					const key = msg.key;
+					if (Object.hasOwn(SHORTCUTS, key)) {
+						const handler = SHORTCUTS[key];
+						if (typeof handler === "string") {
+							document.getElementById(handler).focus();
+							document.getElementById(handler).scrollIntoView();
+						} else {
+							SHORTCUTS[key](event);
+						}
 					}
+				} else if (msg.type === "contentHeight") {
+					// Allow iframes to tell us what their height should be.
+					// Similar to the now-abandoned seamless attribute for iframes.
+					const iframe = iframes.find(
+						(iframe) => iframe.contentWindow === e.source,
+					);
+					iframe.height = `${JSON.parse(e.data).height}px`;
 				}
 			});
 		</script>
 	</head>
 	<body>
+		{% block override_header %}
 		<header>
 			<hgroup>
 				<h1><a tabindex="-1" class="contrast" href="/">mnbot</a></h1>
@@ -50,6 +84,7 @@
 				</ul>
 			</nav>
 		</header>
+		{% endblock %}
 		<main>
 			{% block content %}
 				<h2>Congrats! You broke the template!</h2>

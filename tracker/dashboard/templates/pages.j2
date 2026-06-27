@@ -1,0 +1,57 @@
+{% extends "skeleton.j2" %}
+
+{% block title %} mnbot pages iframe {% endblock %}
+
+{% block override_header %} {% endblock %}
+
+{% block content %}
+
+<style>
+nav {
+	vertical-align: center;
+}
+</style>
+
+<header>
+	<div>
+		<a role="button" class="secondary" href="">Reload</a>
+	</div>
+	<nav>
+		<ul>
+			<li><em{% if volatile %} data-tooltip="Order may change as the job is run." data-placement="left" {% endif %}>
+					{% if not offset and not rows %} No matches were found.
+					{% else %} Showing rows {{ offset + 1 }} to {{ offset + len(rows) }}
+					{% endif %}
+			</em></li>
+			{% if not prev_offset is none %}
+				<li><a role="button" href="?offset={{ prev_offset }}">Prev</a></li>
+			{% endif %}
+			{% if not next_offset is none %}
+				<li><a role="button" href="?offset={{ next_offset }}">Next</a></li>
+			{% endif %}
+		</ul>
+	</nav>
+</header>
+
+<section id="pages">
+	{% for row in rows %}
+		<a class="link-box" href="{{ url_for('single_page', page_id = row.page_id, html = True) }}" target="_top">
+			<div role="button" class="outline contrast link-box-inner">
+				<b>{{ row.payload }}</b>
+				<br />
+				<small>
+					{% if use_status %}
+						Status: {{ macros.page_status(row.status, row.remaining) }}
+					{% else %}
+						{{ row.attempt_count }} total attempt{% if row.attempt_count != 1 %}s{% endif %}
+					{% endif %}
+				</small>
+			</div>
+		</a>
+	{% endfor %}
+	{% if not offset and not rows %}
+		<p>There aren't any pages that match this query.</p>
+	{% endif %}
+</section>
+
+{% endblock %}
