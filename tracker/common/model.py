@@ -34,10 +34,6 @@ class ResultType(enum.Enum):
     CUSTOM_JS_SCREENSHOT = 5
     CUSTOM_JS = 6
 
-class JobType(enum.Enum):
-    BROZZLER = 0
-    NONE = -1
-
 class Column(sqlalchemy.Column):
     inherit_cache = True
 
@@ -69,7 +65,6 @@ jobs = Table(
     "jobs",
     metadata_obj,
     Column("job_id", sqlalchemy.Uuid, primary_key = True),
-    Column("type", sqlalchemy.Enum(JobType)),
     Column("status", sqlalchemy.Enum(JobStatus)),
     Column("active_claims", sqlalchemy.SmallInteger, default = 0),
     Column("depth", sqlalchemy.Integer, nullable = True),
@@ -84,7 +79,7 @@ jobs = Table(
 jobs_dequeue_order = (jobs.c.nice, jobs.c.job_id)
 jobs_dequeue_index = Index(
     "jobs_dequeue_index",
-    jobs.c.type, *jobs_dequeue_order, jobs.c.tag,
+    *jobs_dequeue_order, jobs.c.tag,
     postgresql_where = (jobs.c.status.in_((JobStatus.ACTIVE, JobStatus.DRAINING))),
 )
 

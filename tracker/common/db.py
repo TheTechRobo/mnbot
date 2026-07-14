@@ -113,7 +113,6 @@ def _debug_compile_statement(stmt, engine):
 @dataclasses.dataclass
 class JobCreation:
     job_id: model.UUID
-    type: model.JobType
     created_by: str
     metadata: dict
     initial_page: str
@@ -153,7 +152,7 @@ class PendingPage:
     ruleset_id: model.UUID
     page_settings: "PageSettings"
 
-def _find_claimable_job_q(pipeline: str | None, type: model.JobType, matchonly: bool, include_existing: model.UUID | None, limit: bool):
+def _find_claimable_job_q(pipeline: str | None, matchonly: bool, include_existing: model.UUID | None, limit: bool):
     """
     Creates a query for find_claimable_job.
     If pipeline is null, remove all filters on tag. This is useful when displaying the queue.
@@ -173,7 +172,6 @@ def _find_claimable_job_q(pipeline: str | None, type: model.JobType, matchonly: 
 
     q = (
         sqlalchemy.select(model.jobs.c.job_id)
-        .where(model.jobs.c.type == type)
         .where( model.jobs.c.status == model.JobStatus.ACTIVE)
         .where(concurrency_where)
         .where(tag_where_clause)
@@ -264,7 +262,6 @@ class Connection:
         for job in jobs:
             values.append(dict(
                 job_id = job.job_id,
-                type = job.type,
                 status = job.status,
                 concurrency = job.concurrency,
                 nice = job.nice,
@@ -343,28 +340,24 @@ class Connection:
         return id_mapping
 
     @_wrap_serialization_failure
-    async def get_job_counts(self) -> dict[model.JobType, int]:
+    async def get_job_counts(self) -> int:
         """
-        Gets the number of active/draining jobs for each job type.
+        Gets the number of active/draining jobs.
         """
         q = (
-            sqlalchemy.select(model.jobs.c.type, sqlalchemy.func.count())
+            sqlalchemy.select(sqlalchemy.func.count())
             .select_from(model.jobs)
-            .group_by(model.jobs.c.type)
             .where( model.jobs.c.status.in_((model.JobStatus.ACTIVE, model.JobStatus.DRAINING)))
         )
         cursor = await self.conn.execute(q)
-        res = {}
-        for row in cursor:
-            res[row[0]] = row[1]
-        return res
+        return cursor.scalar_one()
 
     @_wrap_serialization_failure
-    async def get_all_claimable_jobs(self, type: model.JobType) -> typing.Sequence[model.UUID]:
+    async def get_all_claimable_jobs(self) -> typing.Sequence[model.UUID]:
         """
         Gets all claimable jobs in order, with no tag restrictions.
         """
-        q = _find_claimable_job_q(None, type, False, None, False)
+        q = _find_claimable_job_q(None, False, None, False)
         cursor = await self.conn.execute(q)
         return [row[0] for row in cursor]
 
@@ -765,18 +758,18 @@ class Pipeline:
         matchonly, job_id, lock = data
         return PipelineInfo(matchonly = matchonly, current_claim = (job_id, lock))
 
-    async def _find_claimable_job(self, type: model.JobType, matchonly: bool, include_existing: model.UUID | None) -> model.UUID | None:
+    async def _find_claimable_job(self, matchonly: bool, include_existing: model.UUID | None) -> model.UUID | None:
         """
         Finds and returns a job to claim for a particular pipeline.
         This doesn't actually claim the job, only selects one.
 
         include_existing is the existing claimed job. If this is specified, that job can have reached its concurrency
-        limit if it is still the first in the queue order and its tag and type still apply.
-        However, if tags etc don't match (e.g. they were changed), another job (or none!) will still be picked.
+        limit if it is still the first in the queue order and its tag still applies.
+        Otherwise, another job (or none!) will still be picked.
 
         If no suitable job can be found, including include_existing, returns None.
         """
-        q = _find_claimable_job_q(self.pipeline_id, type, matchonly, include_existing, True)
+        q = _find_claimable_job_q(self.pipeline_id, matchonly, include_existing, True)
         cursor = await self.conn.execute(q)
         res = cursor.first()
         if res:
@@ -889,7 +882,7 @@ class Pipeline:
         )
 
     @_wrap_serialization_failure
-    async def find_claim_page(self, pipeline_version: str, slot: int, type: model.JobType) -> PageClaimInfo | None:
+    async def find_claim_page(self, pipeline_version: str, slot: int) -> PageClaimInfo | None:
         """
         Claims a page.
 
@@ -905,7 +898,7 @@ class Pipeline:
         current_claim, current_lock = pipeline_info.current_claim
         if current_lock is None:
             # No lock exists, try to find a better job
-            new_job = await self._find_claimable_job(type, pipeline_info.matchonly, current_claim)
+            new_job = await self._find_claimable_job(pipeline_info.matchonly, current_claim)
             if new_job and new_job != pipeline_info.current_claim[0]:
                 # Found a better option, let's claim that
                 await self._set_claim(slot, new_job)
@@ -1024,7 +1017,7 @@ class Pipeline:
         return await self._set_page_status_q(page_id, not fatal)
 
     @_wrap_serialization_failure
-    async def create_result(self, attempt_id: model.UUID, result_id: model.UUID, type: model.ResultType, payload: typing.Any):
+    async def create_result(self, attempt_id: model.UUID, result_id: model.UUID, result_type: model.ResultType, payload: typing.Any):
         """
         Creates a result with the given result ID.
         Note: If a result already exists with that ID, this method will silently do nothing.
@@ -1033,7 +1026,7 @@ class Pipeline:
         val = dict(
             result_id = result_id,
             attempt_id = attempt_id,
-            type = type,
+            type = result_type,
             payload = payload,
         )
         await self.conn.execute(q, [val])

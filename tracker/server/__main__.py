@@ -51,7 +51,7 @@ async def get(ctx: HandlerContext, *, slot) -> Response:
 
     async with pipeline.parent.conn.begin():
         try:
-            claim = await pipeline.find_claim_page(ctx.version, slot, model.JobType.BROZZLER)
+            claim = await pipeline.find_claim_page(ctx.version, slot)
         except db.JobExhausted as e:
             claim = None
             ns = await pipeline.parent.update_job_status(e.job_id)

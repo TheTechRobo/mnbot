@@ -38,7 +38,6 @@ class RulesetInfoPacket:
 @dataclasses.dataclass
 class JobInfoPacket:
     id: model.UUID
-    type: model.JobType
     status: model.JobStatus
     active_claims: list[str]
     depth: int | None
@@ -92,7 +91,6 @@ async def home():
         conn = await conn.execution_options(postgresql_readonly = True)
         q = (
             sqlalchemy.select(model.jobs.c.job_id, model.jobs.c.initial_page, model.jobs.c.note)
-            .where(model.jobs.c.type == model.JobType.BROZZLER)
             .where(model.jobs.c.status.in_((model.JobStatus.ACTIVE, model.JobStatus.DRAINING)))
             .order_by(*model.jobs_dequeue_order)
         )
@@ -251,7 +249,6 @@ async def single_job(job_id, html):
         ruleset = RulesetInfoPacket(row.job_ruleset_id, [db.JobRule(*rule) for rule in row.rules])
         packet = JobInfoPacket(
             id = row.job_id,
-            type = row.type,
             status = row.status,
             depth = row.depth,
             concurrency = row.concurrency,
@@ -266,7 +263,6 @@ async def single_job(job_id, html):
         return await render_template("job.j2", job = packet)
     v = dataclasses.asdict(packet)
     v['status'] = v['status'].name
-    v['type'] = v['type'].name
     return {"status": 200, "job": v}
 
 async def pages_list(q, html, job_id, volatile = True, use_status = False):

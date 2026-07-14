@@ -104,7 +104,6 @@ async def brozzle(self: Bot, user: User, ran, args):
     job_id = db.generate_id()
     job = db.JobCreation(
         job_id = job_id,
-        type = model.JobType.BROZZLER,
         created_by = user.nick,
         metadata = metadata,
         initial_page = args.url,
@@ -234,11 +233,11 @@ async def status(self: Bot, user: User, ran, *jobs):
                 yield await generate_status_message(job, queue)
         else:
             async with ENGINE.connect() as conn:
-                counts = await queue.get_job_counts()
-                if not counts:
-                    yield "There aren't any queued, running, or stashed items."
-                for pipeline_type, count in counts.items():
-                    yield f"Status for {str(pipeline_type.name)}: {count} active jobs."
+                count = await queue.get_job_counts()
+                if not count:
+                    yield "There aren't any queued or running jobs."
+                else:
+                    yield f"There are currently {count} active jobs."
 
 @bot.command({"!explain", "!e"})
 async def explain(self: Bot, user: User, ran, id, *reason):
