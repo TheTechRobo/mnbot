@@ -101,7 +101,9 @@ def parse_id(id: str) -> model.UUID:
     except ValueError:
         raise InvalidIdError()
 
-def parse_id_ex(id: str) -> uuid_utils.UUID:
+def parse_id_ex(id: str | model.UUID) -> uuid_utils.UUID:
+    if isinstance(id, model.UUID):
+        id = str(id)
     try:
         return uuid_utils.UUID(id)
     except ValueError:
@@ -116,6 +118,7 @@ class JobCreation:
     created_by: str
     metadata: dict
     initial_page: str
+    initial_ruleset: "JobRuleset"
 
     status: model.JobStatus = model.JobStatus.ACTIVE
     concurrency: int = 0
@@ -183,22 +186,79 @@ def _find_claimable_job_q(pipeline: str | None, matchonly: bool, include_existin
     return q
 
 @dataclasses.dataclass
-class PageSettings:
-    ua: str = "default"
-    custom_js: str | None = None
-    skip: bool = False
-    accept: bool = False
+class JobRule[T]:
+    scope: str
+    payload: T
 
-    def __or__(self, value):
-        if not isinstance(value, dict):
-            return NotImplemented
+    def __post_init__(self):
+        self._compiled_scope = regex.compile(self.scope)
 
-        return PageSettings(
-            ua = value.get("ua", self.ua),
-            custom_js = value.get("custom_js", self.custom_js),
-            skip = value.get("skip", self.skip),
-            accept = value.get("accept", self.accept),
+    @property
+    def compiled_scope(self):
+        return self._compiled_scope
+
+    def for_db(self):
+        return (self.scope, self.payload)
+
+RulesetPayload = typing.TypeVar("RulesetPayload")
+
+@dataclasses.dataclass
+class RulesetColumn[RulesetPayload]:
+    default: RulesetPayload
+    rules: list[JobRule[RulesetPayload]]
+
+@dataclasses.dataclass
+class JobRuleset:
+    job_ruleset_id: model.UUID
+    ua: RulesetColumn[str]
+    custom_js: RulesetColumn[str | None]
+    skip: RulesetColumn[bool]
+    accept: RulesetColumn[bool]
+
+    @staticmethod
+    def _make_column(value):
+        return RulesetColumn(value[0], [JobRule(scope, payload) for scope, payload in value[1]])
+
+    @staticmethod
+    def _encode_column(column: RulesetColumn):
+        return (column.default, [rule.for_db() for rule in column.rules])
+
+    @classmethod
+    def from_row(cls, row):
+        return cls(
+            job_ruleset_id = row.job_ruleset_id,
+            ua = cls._make_column(row.ua),
+            custom_js = cls._make_column(row.custom_js),
+            skip = cls._make_column(row.skip),
+            accept = cls._make_column(row.accept),
         )
+
+    def for_db(self, job_id: model.UUID | None = None):
+        aux = {"job_id": job_id} if job_id else {}
+        return {
+                "job_ruleset_id": self.job_ruleset_id,
+                "ua": self._encode_column(self.ua),
+                "custom_js": self._encode_column(self.custom_js),
+                "skip": self._encode_column(self.skip),
+                "accept": self._encode_column(self.accept),
+        } | aux
+
+@dataclasses.dataclass
+class PageSettings:
+    ua: str
+    custom_js: str | None
+    skip: bool
+    accept: bool
+
+    @classmethod
+    def from_ruleset(cls, url: str, ruleset: JobRuleset) -> typing.Self:
+        kwargs = {}
+        for key, column in (("ua", ruleset.ua), ("custom_js", ruleset.custom_js), ("skip", ruleset.skip), ("accept", ruleset.accept)):
+            kwargs[key] = column.default
+            for rule in column.rules:
+                if rule.compiled_scope.search(url, timeout = 15):
+                    kwargs[key] = rule.payload
+        return cls(**kwargs)
 
     def as_dict(self):
         return dataclasses.asdict(self)
@@ -210,6 +270,7 @@ class PageClaimInfo:
     attempt_id: model.UUID
     payload: str
     settings: PageSettings
+    ruleset_id: model.UUID
 
     def as_json_friendly_dict(self):
         return {
@@ -218,22 +279,8 @@ class PageClaimInfo:
             "attempt_id": str(self.attempt_id),
             "payload": self.payload,
             "settings": dataclasses.asdict(self.settings),
+            "ruleset_id": str(self.ruleset_id),
         }
-
-@dataclasses.dataclass
-class JobRule:
-    scope: str
-    payload: dict
-
-    def __post_init__(self):
-        self._compiled_scope = regex.compile(self.scope)
-
-    @property
-    def compiled_scope(self):
-        return self._compiled_scope
-
-    def for_db(self):
-        return (self.scope, self.payload)
 
 class Connection:
     """
@@ -259,6 +306,7 @@ class Connection:
         Adds jobs to the database.
         """
         values = []
+        rulesets = []
         for job in jobs:
             values.append(dict(
                 job_id = job.job_id,
@@ -272,7 +320,9 @@ class Connection:
                 metadata = job.metadata,
                 depth = job.depth,
             ))
+            rulesets.append(job.initial_ruleset.for_db() | {"job_id": job.job_id})
         await self.conn.execute(sqlalchemy.insert(model.jobs), values)
+        await self.conn.execute(sqlalchemy.insert(model.job_rulesets), rulesets)
 
     @_wrap_serialization_failure
     async def create_pages(self, job_id: model.UUID, pages: typing.Iterable[PageCreation]) -> dict[model.UUID, model.UUID]:
@@ -540,21 +590,21 @@ class Connection:
         return row[0], row[1:]
 
     @_wrap_serialization_failure
-    async def get_ruleset(self, job_ruleset_id: model.UUID) -> list[JobRule]:
+    async def get_ruleset(self, job_ruleset_id: model.UUID) -> JobRuleset:
         q = (
-            sqlalchemy.select(model.job_rulesets.c.rules)
+            sqlalchemy.select(model.job_rulesets)
             .where(model.job_rulesets.c.job_ruleset_id == job_ruleset_id)
         )
-        res = await self.conn.scalar(q)
-        if res is None:
+        res = await self.conn.execute(q)
+        row = res.one()
+        if row is None:
             raise NoSuchThingError(job_ruleset_id)
-        rules = [JobRule(rule[0], rule[1]) for rule in res]
-        return rules
+        return JobRuleset.from_row(row)
 
     @_wrap_serialization_failure
-    async def get_job_ruleset(self, job_id: model.UUID, for_update = False) -> tuple[model.UUID, list[JobRule]]:
+    async def get_job_ruleset(self, job_id: model.UUID, for_update = False) -> JobRuleset:
         q = (
-            sqlalchemy.select(model.job_rulesets.c.job_ruleset_id, model.job_rulesets.c.rules)
+            sqlalchemy.select(model.job_rulesets)
             .where(model.job_rulesets.c.job_id == job_id)
             .order_by(model.job_rulesets.c.job_ruleset_id.desc())
             .limit(1)
@@ -562,15 +612,12 @@ class Connection:
         if for_update:
             q = q.with_for_update(key_share = True)
         res = await self.conn.execute(q)
-        row = res.one_or_none()
-        if row is None:
-            return uuid.UUID(int = 0), []
-        ruleset_id, raw_rules = row
-        rules = [JobRule(rule[0], rule[1]) for rule in raw_rules]
-        return ruleset_id, rules
+        row = res.one()
+        rules = JobRuleset.from_row(row)
+        return rules
 
     @_wrap_serialization_failure
-    async def new_ruleset(self, job_id: model.UUID, ruleset_id: model.UUID, rules: list[JobRule]):
+    async def new_ruleset(self, job_id: model.UUID, ruleset: JobRuleset):
         """
         Sets a job's ruleset, overriding previous ones.
         Throws RulesetConflict if a newer ruleset ID exists, which could be caused by a bad system clock.
@@ -580,7 +627,7 @@ class Connection:
         q = (
             sqlalchemy.select(model.job_rulesets.c.job_ruleset_id)
             .where(model.job_rulesets.c.job_id == job_id)
-            .where(model.job_rulesets.c.job_ruleset_id >= ruleset_id)
+            .where(model.job_rulesets.c.job_ruleset_id >= ruleset.job_ruleset_id)
             .limit(1)
         )
         row = (await self.conn.execute(q)).one_or_none()
@@ -589,11 +636,10 @@ class Connection:
 
         # Insert new ruleset
         q = sqlalchemy.insert(model.job_rulesets)
-        raw_rules = [rule.for_db() for rule in rules]
-        await self.conn.execute(q, dict(job_ruleset_id = ruleset_id, job_id = job_id, rules = raw_rules))
+        await self.conn.execute(q, ruleset.for_db() | {"job_id": job_id})
 
     @_wrap_serialization_failure
-    async def create_job_rule(self, job_id: model.UUID, before_rule: int | None, rule: JobRule, ensure_ruleset: model.UUID | None = None) -> tuple[model.UUID, int]:
+    async def create_job_rule(self, job_id: model.UUID, rule_category: str, before_rule: int | None, rule: JobRule, ensure_ruleset: model.UUID | None = None) -> tuple[model.UUID, int]:
         """
         Creates a job rule before the given rule position, or None to append to the end.
 
@@ -602,47 +648,51 @@ class Connection:
 
         Returns the new ruleset ID and the new rule index.
         """
-        old_ruleset_id, rules = await self.get_job_ruleset(job_id, for_update = True)
+        current_ruleset = await self.get_job_ruleset(job_id, for_update = True)
         if ensure_ruleset is not None:
-            if ensure_ruleset != old_ruleset_id:
-                raise RulesetConflict(old_ruleset_id)
+            if ensure_ruleset != current_ruleset.job_ruleset_id:
+                raise RulesetConflict(current_ruleset.job_ruleset_id)
+        col: RulesetColumn = getattr(current_ruleset, rule_category)
         if before_rule is None:
-            rules.append(rule)
-            position = len(rules) - 1
+            col.rules.append(rule)
+            position = len(col.rules) - 1
         else:
-            if before_rule >= len(rules) or before_rule < 0:
+            if before_rule >= len(col.rules) or before_rule < 0:
                 raise NoSuchThingError(before_rule)
-            rules.insert(before_rule, rule)
+            col.rules.insert(before_rule, rule)
             position = before_rule
         new_id = generate_id()
-        await self.new_ruleset(job_id, new_id, rules)
+        current_ruleset.job_ruleset_id = new_id
+        await self.new_ruleset(job_id, current_ruleset)
         return new_id, position
 
     @_wrap_serialization_failure
-    async def remove_job_rule(self, job_id: model.UUID, index: int, ensure_ruleset: model.UUID | None = None) -> tuple[model.UUID, JobRule]:
+    async def remove_job_rule(self, job_id: model.UUID, rule_category: str, index: int, ensure_ruleset: model.UUID | None = None) -> tuple[model.UUID, JobRule]:
         """
         Removes a given job rule. If the rule does not exist, raises NoSuchThingError.
 
         Raises RulesetConflict if the ensure_ruleset check fails.
         Returns the new ruleset ID and the old rule value.
         """
-        old_ruleset_id, rules = await self.get_job_ruleset(job_id, for_update = True)
+        current_ruleset = await self.get_job_ruleset(job_id, for_update = True)
         if ensure_ruleset is not None:
-            if ensure_ruleset != old_ruleset_id:
-                raise RulesetConflict(old_ruleset_id)
+            if ensure_ruleset != current_ruleset.job_ruleset_id:
+                raise RulesetConflict(current_ruleset.job_ruleset_id)
         if index < 0:
             raise NoSuchThingError(index)
+        col: RulesetColumn = getattr(current_ruleset, rule_category)
         try:
-            old_val = rules.pop(index)
+            old_val = col.rules.pop(index)
         except IndexError:
             raise NoSuchThingError(index)
         new_id = generate_id()
-        await self.new_ruleset(job_id, new_id, rules)
+        current_ruleset.job_ruleset_id = new_id
+        await self.new_ruleset(job_id, current_ruleset)
         return new_id, old_val
 
 
     @_wrap_serialization_failure
-    async def remove_job_rules_by_scope(self, job_id: model.UUID, scope: str, ensure_ruleset: model.UUID | None = None) -> tuple[model.UUID, int]:
+    async def remove_job_rules_by_scope(self, job_id: model.UUID, rule_category: str, scope: str, ensure_ruleset: model.UUID | None = None) -> tuple[model.UUID, int]:
         """
         Remove all job rules with the given scope.
         Returns the new ruleset ID and the number of rules removed.
@@ -650,30 +700,24 @@ class Connection:
 
         Raises RulesetConflict if the ensure_ruleset check fails.
         """
-        old_ruleset_id, old_rules = await self.get_job_ruleset(job_id, for_update = True)
+        current_ruleset = await self.get_job_ruleset(job_id, for_update = True)
         values_removed = 0
         if ensure_ruleset is not None:
-            if ensure_ruleset != old_ruleset_id:
-                raise RulesetConflict(old_ruleset_id)
+            if ensure_ruleset != current_ruleset.job_ruleset_id:
+                raise RulesetConflict(current_ruleset.job_ruleset_id)
         new_rules = []
-        for rule in old_rules:
+        old_col: RulesetColumn = getattr(current_ruleset, rule_category)
+        for rule in old_col.rules:
             if rule.scope == scope:
                 values_removed += 1
                 continue
             new_rules.append(rule)
         if not values_removed:
-            return old_ruleset_id, 0
-        new_id = generate_id()
-        await self.new_ruleset(job_id, new_id, new_rules)
-        return new_id, values_removed
-
-    @staticmethod
-    def compute_page_settings(rules: list[JobRule], url: str) -> PageSettings:
-        settings = PageSettings()
-        for rule in rules:
-            if rule.compiled_scope.search(url, timeout = 15):
-                settings |= rule.payload
-        return settings
+            return current_ruleset.job_ruleset_id, 0
+        current_ruleset.job_ruleset_id = generate_id()
+        old_col.rules = new_rules
+        await self.new_ruleset(job_id, current_ruleset)
+        return current_ruleset.job_ruleset_id, values_removed
 
     @classmethod
     def _page_depth(cls, page_id):
@@ -714,7 +758,7 @@ class Connection:
 
         Yields a PendingPage object for every page.
         """
-        ruleset_id, rules = await self.get_job_ruleset(job_id)
+        ruleset = await self.get_job_ruleset(job_id)
         select_query = self._all_pending_pages_q(job_id)
         if _page_id is not None:
             select_query = select_query.where(model.pages.c.page_id == _page_id)
@@ -722,8 +766,8 @@ class Connection:
         async with self.conn.stream(select_query) as stream:
             async for row in stream:
                 page_id, payload = row
-                settings = self.compute_page_settings(rules, payload)
-                yield PendingPage(page_id, payload, ruleset_id, settings)
+                settings = PageSettings.from_ruleset(payload, ruleset)
+                yield PendingPage(page_id, payload, ruleset.job_ruleset_id, settings)
 
 class Pipeline:
     """
@@ -879,6 +923,7 @@ class Pipeline:
             job_id = job_id,
             payload = info.payload,
             settings = info.page_settings,
+            ruleset_id = info.ruleset_id,
         )
 
     @_wrap_serialization_failure

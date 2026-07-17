@@ -17,7 +17,7 @@
 			</span>
 		</li>
 		<li><b data-tooltip="Lower nice values are run first.">Nice: </b>{{ job.nice }}</li>
-		<li><b>Created at: </b></li>
+		<li><b>Created at: </b>{{ timestamp }}</li>
 		<li><b>Max depth: </b>{{ job.depth }}</li>
 		<li><b>Max concurrency: </b>{{ job.concurrency }} ({{ job.active_claims|length }} active claims)</li>
 		{% if job.explanation %}
@@ -39,34 +39,28 @@
 
 <section id="settings" aria-keyshortcuts="s" tabindex="-1">
 	<h3><span class="shortcut">S</span>ettings</h3>
-	<p>Job rules are applied in order. The last instance of a setting wins.</p>
 	<p>For more information about the job rules system, see <a href="/docs">the documentation</a>.</p>
 	<ul>
-		{% for rule in job.ruleset.rules %}
-			<li>
-				{% if rule.scope == "" %}
-					<b>Base rule</b> (applies to all pages; index {{ loop.index0 }}):
-				{% else %}
-					All pages matching <code>{{ rule.scope }}</code> (index {{ loop.index0 }}):
-				{% endif %}
-				{{ macros.build_settings(rule.payload) }}
-			</li>
-		{% endfor %}
+		<li><b>User agent</b> (<code>ua</code>): {{ macros.build_rules("ua", job.ruleset.ua) }}</li>
+		<li><b>Custom JavaScript</b> (<code>custom_js</code>): {{ macros.build_rules("custom_js", job.ruleset.custom_js) }}</li>
+		<li><b data-tooltip="Whether to accept discovered outlinks into the queue.">Accept</b> (<code>accept</code>): {{ macros.build_rules("accept", job.ruleset.accept) }}</li>
+		<li><b data-tooltip="Whether to skip URLs that are already in the queue.">Skip</b> (<code>skip</code>): {{ macros.build_rules("skip", job.ruleset.skip) }}</li>
 	</ul>
-	<p>(Ruleset ID: {{ job.ruleset.id }})</p>
+	<p>(Ruleset ID: {{ job.ruleset.job_ruleset_id }})</p>
 	<article id="ruletester">
 		<h4>Rule tester</h4>
 		<p>
 			You can test how a particular URL will be handled with this tool.
-			The job rules system uses the Python <a href="https://pypi.org/project/regex">regex</a> module with the default settings.
+			The job rules system uses the Python <a href="https://pypi.org/project/regex">regex</a> module with the default settings
+			and a timeout of 15 seconds.
 			For accurate results, ensure you use the full URL (including e.g. protocol).
 		</p>
 		<p>
-			<small>Currently-loaded ruleset ID: {{ job.ruleset.id }}</small>
+			<small>Currently-loaded ruleset ID: {{ job.ruleset.job_ruleset_id }}</small>
 		</p>
 		<form onsubmit="return false;" id="ruletester">
 			<fieldset role="group">
-				<input id="rsid" name="rs" type="hidden" value="{{ job.ruleset.id }}" />
+				<input id="rsid" name="rs" type="hidden" value="{{ job.ruleset.job_ruleset_id }}" />
 				<input name="url" id="rsurl" placeholder="URL" />
 				<input type="submit" value="Calculate" id="ruletester-btn" />
 			</fieldset>

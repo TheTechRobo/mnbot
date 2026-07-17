@@ -2,7 +2,6 @@ from sqlalchemy import ForeignKey, Index, MetaData, Table
 import sqlalchemy, sqlalchemy.dialects.postgresql, sqlalchemy.event
 
 import enum
-import typing
 
 from uuid import UUID
 
@@ -83,16 +82,20 @@ jobs_dequeue_index = Index(
     postgresql_where = (jobs.c.status.in_((JobStatus.ACTIVE, JobStatus.DRAINING))),
 )
 
-# Array schema: JSONB of [scope: str, payload: dict]
 job_rulesets = Table(
     "job_rulesets",
     metadata_obj,
     Column("job_ruleset_id", sqlalchemy.Uuid, primary_key = True),
     Column("job_id", sqlalchemy.Uuid, ForeignKey("jobs.job_id")),
-    Column("rules", sqlalchemy.dialects.postgresql.ARRAY(sqlalchemy.dialects.postgresql.JSONB, dimensions = 1, zero_indexes = True)),
+
+    Column("ua", sqlalchemy.dialects.postgresql.JSONB),
+    Column("custom_js", sqlalchemy.dialects.postgresql.JSONB),
+    Column("skip", sqlalchemy.dialects.postgresql.JSONB),
+    Column("accept", sqlalchemy.dialects.postgresql.JSONB),
 
     Index("job_rulesets_by_job_id", "job_id"),
 )
+job_ruleset_columns = (job_rulesets.c.ua, job_rulesets.c.custom_js, job_rulesets.c.skip, job_rulesets.c.accept)
 
 class ClaimLock(enum.Enum):
     UNTIL_FINISHED = 0

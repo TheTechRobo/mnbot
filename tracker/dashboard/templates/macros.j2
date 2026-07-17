@@ -9,38 +9,58 @@
 
 {% macro build_settings(settings) %}
 	<ul>
-		{% if settings.ua is defined %}
-			<li><b>User agent: </b>{{ build_ua(settings.ua) }}</li>
+		<li><b>User agent: </b>{{ build_ua(settings.ua) }}</li>
+		{% if settings.custom_js %}
+			<li>
+				<details style="display: block; margin:0">
+					<summary><b>Custom JavaScript: </b>Click to show</summary>
+					<pre>{{ settings.custom_js }}</pre>
+				</details>
+			</li>
+		{% else %}
+			<li><b>Custom JavaScript: </b>None</li>
 		{% endif %}
-		{% if settings.custom_js is defined %}
-			{% if settings.custom_js %}
-				<li>
-					<details style="display: block; margin:0">
-						<summary><b>Custom JavaScript: </b>Click to show</summary>
-						<pre>{{ settings.custom_js }}</pre>
-					</details>
-				</li>
+		{% if settings.skip %}
+			<li><b data-tooltip="Instead of dequeuing this page, its status will be changed to SKIPPED.">Skip this page</b></li>
+		{% else %}
+			<li>Do not skip this page</li>
+		{% endif %}
+		<li><span data-tooltip="NB: This has no effect for pages already in the queue.">
+			{% if settings.accept %}
+				Accept this URL into the queue
 			{% else %}
-				<li><b>Custom JavaScript: </b>None</li>
+				Reject this URL from the queue
 			{% endif %}
-		{% endif %}
-		{% if settings.skip is defined %}
-			{% if settings.skip %}
-				<li><b data-tooltip="Instead of dequeuing this page, its status will be changed to SKIPPED.">Skip this page</b></li>
-			{% else %}
-				<li>Do not skip this page</li>
-			{% endif %}
-		{% endif %}
-		{% if settings.accept is defined %}
-			<li><span data-tooltip="NB: This has no effect for pages already in the queue.">
-				{% if settings.accept %}
-					Accept this URL into the queue
-				{% else %}
-					Reject this URL from the queue
-				{% endif %}
-			</span></li>
-		{% endif %}
+		</span></li>
 	</ul>
+{% endmacro %}
+
+{% macro build_rule_value(type, val) %}
+	{% if type == "ua" %} {{ build_ua(val) }}
+	{% elif type == "skip" or type == "accept" %} {{ val }}
+	{% elif type == "custom_js" %}
+		{% if val is none %} None
+		{% else %} <details><summary>Click to show</summary><pre>{{ val }}</pre></details>
+		{% endif %}
+	{% else %} Unreachable code! {{ val }} {% endif %}
+{% endmacro %}
+
+{% macro build_rules(type, col) %}
+	{% if col.rules %}
+		<details>
+			<summary>Varies (click to show)</summary>
+			<ul>
+				<li>
+					<b>Default (all pages): </b>{{ build_rule_value(type, col.default) }}
+				</li>
+				{% for rule in col.rules %}
+					<li><b>URLs matching <code>{{ rule.scope }}</code></b> (index {{ loop.index0 }}): {{ build_rule_value(type, col.default) }}</li>
+				{% endfor %}
+			</ul>
+		</details>
+	{% else %}
+		{{ build_rule_value(type, col.default) }}
+	{% endif %}
 {% endmacro %}
 
 {% macro page_status(status, attempts_remaining) %}

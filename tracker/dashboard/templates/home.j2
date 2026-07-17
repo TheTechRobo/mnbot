@@ -7,6 +7,7 @@
 <section id="jobs">
 	<h2>Dashboard</h2>
 	<p>Sorry, live update is currently not implemented. Refresh the page for current statistics.</p>
+	<p>There are currently {{ jobs|length }} active jobs.</p>
 	{% for job_id, initial_page, note in jobs %}
 		<article>
 			<header style="display: flex">

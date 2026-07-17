@@ -45,15 +45,28 @@ PRESET_USER_AGENTS = {
         "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
     ),
 }
+DYNAMIC_USER_AGENTS = ("default", "stealth", "minimal", "googlebot")
 
 class ValidationError(Exception):
     def __init__(self, url):
         self.url = url
 
+class CustomMessageException(Exception):
+    def __init__(self, msg):
+        self.msg = msg
+
+def select_ua(ua):
+    if user_agent := PRESET_USER_AGENTS.get(ua):
+        return  "$" + user_agent
+    elif ua in DYNAMIC_USER_AGENTS:
+        return ua
+    else:
+        raise ValueError("Invalid user agent selection")
+
 @bot.add_argument("--concurrency", "-c", type = int, default = 1)
 @bot.add_argument(
     "--user-agent", "-u",
-    choices = ("default", "stealth", "curl", "archivebot", "minimal", "googlebot1", "googlebot"),
+    choices = list(DYNAMIC_USER_AGENTS) + list(PRESET_USER_AGENTS.keys()),
     default = "default"
 )
 @bot.add_argument("--explanation", "--explain", "-e")
@@ -75,8 +88,7 @@ async def brozzle(self: Bot, user: User, ran, args):
             yield "Sorry, but only operators can bypass URL validation."
             return
 
-    initial_settings = db.PageSettings()
-
+    cjs_config = None
     if args.custom_js:
         if "@" not in user.modes:
             yield "Sorry, but only operators can use custom JavaScript."
@@ -90,16 +102,21 @@ async def brozzle(self: Bot, user: User, ran, args):
                 if not is_mnbot_js(custom_js):
                     yield "Error: Custom JS must start with a valid mnbot header."
                     return
-                initial_settings.custom_js = custom_js
+                cjs_config = custom_js
         except Exception as e:
             yield f"Failed to retrieve custom JS ({type(e)} was raised)."
             print("Custom JS exception:")
             traceback.print_exc()
             return
-    if ua := PRESET_USER_AGENTS.get(args.user_agent):
-        initial_settings.ua = "$" + ua
-    elif args.user_agent != "default":
-        initial_settings.ua = args.user_agent
+    ua_config = select_ua(args.user_agent)
+
+    initial_ruleset = db.JobRuleset(
+            db.generate_id(),
+            ua = db.RulesetColumn(ua_config, []),
+            custom_js = db.RulesetColumn(cjs_config, []),
+            skip = db.RulesetColumn(False, []),
+            accept = db.RulesetColumn(False, []),
+    )
 
     job_id = db.generate_id()
     job = db.JobCreation(
@@ -110,13 +127,12 @@ async def brozzle(self: Bot, user: User, ran, args):
         concurrency = args.concurrency,
         nice = args.nice,
         note = args.explanation,
+        initial_ruleset = initial_ruleset,
     )
 
     async with ENGINE.connect() as conn:
         queue = db.Connection(conn)
-
         await queue.create_jobs([job])
-        await queue.create_job_rule(job_id, None, db.JobRule("", initial_settings.as_dict()))
 
         num_urls = 0
         async def submit_page_batch(pages):
@@ -172,32 +188,66 @@ async def brozzle(self: Bot, user: User, ran, args):
             await conn.commit()
             yield f"Queued {args.url} for Brozzler-based archival. You will be notified when it finishes. Use !status {job_id} or check {item_url(job_id)} for details."
 
-@bot.add_argument("--skip", action = "store_true", dest = "skip", default = None)
-@bot.add_argument("--no-skip", action = "store_false", dest = "skip", default = None)
-@bot.add_argument("--accept", action = "store_true", dest = "accept", default = None)
-@bot.add_argument("--reject", action = "store_false", dest = "accept", default = None)
 @bot.add_argument("--add-before", default = None, type = int)
 @bot.add_argument("--ensure-ruleset", default = None)
+@bot.add_argument("arg", nargs = "?")
 @bot.add_argument("pattern")
+@bot.add_argument("setting", choices = ("ua", "custom_js", "skip", "no_skip", "accept", "reject"))
 @bot.add_argument("job_id")
 @bot.argparse("!addrule")
-@bot.command({"!addrule"})
+@bot.command({"!addrule"}, required_modes = "+@")
 async def addrule(self: Bot, user: User, ran, args):
-    settings = {}
-    if args.skip is not None:
-        settings['skip'] = args.skip
-    if args.accept is not None:
-        settings['accept'] = args.accept
-    if not settings:
-        yield "You must specify at least one setting."
+    if args.setting in ("skip", "no_skip", "accept", "reject") and args.arg:
+        yield f"The '{args.setting}' setting does not accept arguments."
+        return
+    if args.setting in ("ua", "custom_js") and not args.arg:
+        yield f"The '{args.setting}' setting requires an additional argument."
         return
     # Ensure the regex can be compiled
     db.regex.compile(args.pattern)
 
     async with ENGINE.begin() as conn:
         queue = db.Connection(conn)
-        nid, nidx = await queue.create_job_rule(args.job_id, args.add_before, db.JobRule(args.pattern, settings), args.ensure_ruleset)
-    yield f"Created new rule at index {nidx} (new ruleset ID: {nid})."
+        if args.setting in ("skip", "no_skip"):
+            key = "skip"
+            payload = (args.setting == "skip")
+        elif args.setting in ("accept", "reject"):
+            key = "accept"
+            payload = (args.setting == "accept")
+        elif args.setting == "ua":
+            key = "ua"
+            try:
+                payload = select_ua(args.arg)
+            except ValueError:
+                raise CustomMessageException("Sorry, but that is not a valid user agent. Choices include: " + ", ".join(PRESET_USER_AGENTS.keys()) + ", ".join(DYNAMIC_USER_AGENTS))
+        elif args.setting == "custom_js":
+            key = "custom_js"
+            raise CustomMessageException("Sorry, but TheTechRobo forgot to implement this.")
+        else:
+            raise RuntimeError("Unreachable code")
+        nid, nidx = await queue.create_job_rule(args.job_id, key, args.add_before, db.JobRule(args.pattern, payload), args.ensure_ruleset)
+    yield f"Created new {key} rule at index {nidx} (new ruleset ID: {nid})."
+
+@bot.add_argument("--index", action = "store_true")
+@bot.add_argument("--ensure-ruleset", default = None)
+@bot.add_argument("pattern_or_index")
+@bot.add_argument("setting", choices = ("ua", "custom_js", "skip", "accept"))
+@bot.add_argument("job_id")
+@bot.argparse("!delrule")
+@bot.command("!delrule", required_modes = "+@")
+async def delrule(self: Bot, user: User, ran, args):
+    async with ENGINE.begin() as conn:
+        queue = db.Connection(conn)
+        if args.index:
+            ruleset_id, old_rule = await queue.remove_job_rule(args.job_id, args.setting, int(args.pattern_or_index), args.ensure_ruleset)
+            message = f"Removed {args.setting} rule {old_rule} (new ruleset ID: {ruleset_id})."
+        else:
+            ruleset_id, num_removed = await queue.remove_job_rules_by_scope(args.job_id, args.setting, args.pattern_or_index, args.ensure_ruleset)
+            if num_removed == 0:
+                raise CustomMessageException("No rule with that pattern was found.")
+            s = "" if num_removed == 1 else "s"
+            message = f"Removed {num_removed} {args.setting} rule{s} (new ruleset ID: {ruleset_id})."
+    yield message
 
 @bot.command({"!concurrency", "!con"})
 async def concurrency(self: Bot, user: User, ran, job_id, num):
@@ -363,6 +413,8 @@ async def handler(self: Bot, command, user: User, e):
         return f"{user.nick}: {RED}Failed to validate URL {repr(e.url)}, cowardly bailing out.{Format.RESET} (Ops may use --skip-url-validation to bypass this.)"
     elif isinstance(e, db.SerializationFailure):
         return f"{user.nick}: {RED}Serialization failure! Please try again."
+    elif isinstance(e, CustomMessageException):
+        return f"{user.nick}: {e.msg}"
     else:
         print("Exception occurred!")
         traceback.print_exc()

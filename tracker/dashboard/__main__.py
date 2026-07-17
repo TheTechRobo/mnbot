@@ -3,6 +3,7 @@ import werkzeug.exceptions
 import os
 import base64
 import dataclasses
+import datetime
 
 import sqlalchemy, sqlalchemy.ext.asyncio, sqlalchemy.dialects.postgresql
 
@@ -31,11 +32,6 @@ async def _setup_engine():
 app.before_serving(_setup_engine)
 
 @dataclasses.dataclass
-class RulesetInfoPacket:
-    id: model.UUID
-    rules: list[db.JobRule]
-
-@dataclasses.dataclass
 class JobInfoPacket:
     id: model.UUID
     status: model.JobStatus
@@ -46,7 +42,7 @@ class JobInfoPacket:
     tag: str | None
     note: str | None
     initial_page: str
-    ruleset: RulesetInfoPacket
+    ruleset: db.JobRuleset
 
 @dataclasses.dataclass
 class ResultsInfoPacket:
@@ -65,7 +61,7 @@ class AttemptInfoPacket:
     pipeline_version: str
     error: str | None
     finished: bool
-    ruleset: RulesetInfoPacket
+    ruleset: db.JobRuleset
     applied_settings: db.PageSettings
     results: ResultsInfoPacket
 
@@ -157,7 +153,7 @@ async def claims(html):
 async def single_page(page_id, html):
     q = sqlalchemy.select(model.pages).where(model.pages.c.page_id == page_id)
     attempt_q = (
-        sqlalchemy.select(model.attempts, model.job_rulesets.c.rules)
+        sqlalchemy.select(model.attempts, *model.job_ruleset_columns)
         .select_from(model.attempts)
         .join(model.job_rulesets, model.attempts.c.ruleset_id == model.job_rulesets.c.job_ruleset_id)
         .where(model.attempts.c.page_id == page_id)
@@ -193,8 +189,8 @@ async def single_page(page_id, html):
                         results.screenshot = result.result_id
                     case model.ResultType.STATUS_CODE:
                         results.status_code = result.payload
-            rules = [db.JobRule(*i) for i in row.rules]
-            applied_settings = db.Connection.compute_page_settings(rules, page_packet.url)
+            ruleset = db.JobRuleset.from_row(row)
+            applied_settings = db.PageSettings.from_ruleset(page_packet.url, ruleset)
             page_packet.all_attempts.append(AttemptInfoPacket(
                 id = row.attempt_id,
                 page_id = page_id,
@@ -202,7 +198,7 @@ async def single_page(page_id, html):
                 pipeline_version = row.pipeline_version,
                 error = row.error,
                 finished = row.finished,
-                ruleset = RulesetInfoPacket(row.ruleset_id, rules),
+                ruleset = ruleset,
                 applied_settings = applied_settings,
                 results = results,
             ))
@@ -220,7 +216,7 @@ async def single_job(job_id, html):
         .scalar_subquery()
     )
     ruleset_q = (
-        sqlalchemy.select(model.job_rulesets.c.job_ruleset_id, model.job_rulesets.c.rules)
+        sqlalchemy.select(model.job_rulesets.c.job_ruleset_id, *model.job_ruleset_columns)
         .where(model.job_rulesets.c.job_id == job_id)
         .order_by(model.job_rulesets.c.job_ruleset_id.desc())
         .limit(1)
@@ -231,8 +227,7 @@ async def single_job(job_id, html):
         sqlalchemy.select(
             model.jobs,
             claim_q.label("all_claims"),
-            ruleset_q.c.job_ruleset_id,
-            ruleset_q.c.rules,
+            ruleset_q,
         )
         .select_from(model.jobs)
         .where(model.jobs.c.job_id == job_id)
@@ -246,7 +241,7 @@ async def single_job(job_id, html):
             if html:
                 return await render_template("error.j2", reason = f"Job ID {job_id} not found", description = "No job with this ID exists.", show_item_search = True), 404
             return {"status": 404, "message": "Job ID not found"}, 404
-        ruleset = RulesetInfoPacket(row.job_ruleset_id, [db.JobRule(*rule) for rule in row.rules])
+        ruleset = db.JobRuleset.from_row(row)
         packet = JobInfoPacket(
             id = row.job_id,
             status = row.status,
@@ -260,7 +255,8 @@ async def single_job(job_id, html):
             active_claims = row.all_claims or [],
         )
     if html:
-        return await render_template("job.j2", job = packet)
+        timestamp = datetime.datetime.fromtimestamp(db.parse_id_ex(packet.id).timestamp / 1000, datetime.timezone.utc)
+        return await render_template("job.j2", job = packet, timestamp = timestamp.isoformat(sep = " ", timespec = "seconds"))
     v = dataclasses.asdict(packet)
     v['status'] = v['status'].name
     return {"status": 200, "job": v}
@@ -338,10 +334,10 @@ async def test_ruleset(job_id, ruleset_id, html):
     async with ENGINE.connect() as conn:
         conn = await conn.execution_options(postgresql_readonly = True)
         queue = db.Connection(conn)
-        latest_ruleset = (await queue.get_job_ruleset(job_id))[0]
-        warning = "<b>Warning: You are not querying the latest ruleset.</b><br />" if str(latest_ruleset) != ruleset_id else ""
+        latest_ruleset = await queue.get_job_ruleset(job_id)
+        warning = "<b>Warning: You are not querying the latest ruleset.</b><br />" if str(latest_ruleset.job_ruleset_id) != ruleset_id else ""
         ruleset = await queue.get_ruleset(ruleset_id)
-        settings = queue.compute_page_settings(ruleset, url)
+        settings = db.PageSettings.from_ruleset(url, ruleset)
     if html:
         return await render_template_string(
             '{{ warning|safe }} URL: <code>{{ url }}</code> <br /> {% import "macros.j2" as macros %} {{ macros.build_settings(settings) }}',
