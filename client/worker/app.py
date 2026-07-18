@@ -174,7 +174,7 @@ async def run_job(ws: Websocket, full_job: dict, info_url: str):
                         continue
                     if coro.get_name() == "stdout":
                         if res := res.decode().strip():
-                            print(f"stdout[{id}]: {res}", flush = True)
+                            print(f"stdout[{attempt_id}]: {res}", flush = True)
                         pending.add(asyncio.create_task(stdout.readline(), name = "stdout"))
                     elif coro.get_name() == "pread":
                         pending.add(asyncio.create_task(pread.readline(), name = "pread"))

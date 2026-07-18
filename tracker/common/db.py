@@ -9,6 +9,7 @@ import dataclasses
 import typing
 import os
 import regex
+import logging
 
 import uuid_utils.compat as uuid
 import uuid_utils
@@ -21,6 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 import asyncpg
 
 from . import model
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.WARNING)
 
 class InvalidQueue(Exception): pass
 
@@ -52,11 +56,14 @@ def _wrap_serialization_failure(f):
     """
     async def newf(*args, **kwargs):
         try:
+            logger.info(f"enter %s", f.__name__)
             return await f(*args, **kwargs)
         except sqlalchemy.exc.DBAPIError as e:
             if e.orig and isinstance(e.orig.__cause__, asyncpg.exceptions.SerializationError):
                 raise SerializationFailure()
             raise
+        finally:
+            logger.info(f"exit %s", f.__name__)
     return newf
 
 @_wrap_serialization_failure

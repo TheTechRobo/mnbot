@@ -63,6 +63,20 @@ def select_ua(ua):
     else:
         raise ValueError("Invalid user agent selection")
 
+async def fetch_custom_js(url):
+    try:
+        async with AIOHTTP_SESSION.get(url) as resp:
+            if resp.status != 200:
+                raise CustomMessageException(f"Failed to retrieve custom JS! Got status {resp.status} (expected 200).")
+            custom_js = await resp.text()
+            if not is_mnbot_js(custom_js):
+                raise CustomMessageException("Error: Custom JS must start with a valid mnbot header.")
+            return custom_js
+    except Exception as e:
+        print("Custom JS exception:")
+        traceback.print_exc()
+        raise CustomMessageException(f"Failed to retrieve custom JS ({type(e)} was raised).")
+
 @bot.add_argument("--concurrency", "-c", type = int, default = 1)
 @bot.add_argument(
     "--user-agent", "-u",
@@ -91,23 +105,9 @@ async def brozzle(self: Bot, user: User, ran, args):
     cjs_config = None
     if args.custom_js:
         if "@" not in user.modes:
-            yield "Sorry, but only operators can use custom JavaScript."
+            yield "Sorry, but only operators can include custom JavaScript."
             return
-        try:
-            async with AIOHTTP_SESSION.get(args.custom_js) as resp:
-                if resp.status != 200:
-                    yield f"Failed to retrieve custom JS! Got status {resp.status} (expected 200)."
-                    return
-                custom_js = await resp.text()
-                if not is_mnbot_js(custom_js):
-                    yield "Error: Custom JS must start with a valid mnbot header."
-                    return
-                cjs_config = custom_js
-        except Exception as e:
-            yield f"Failed to retrieve custom JS ({type(e)} was raised)."
-            print("Custom JS exception:")
-            traceback.print_exc()
-            return
+        cjs_config = await fetch_custom_js(args.custom_js)
     ua_config = select_ua(args.user_agent)
 
     initial_ruleset = db.JobRuleset(
@@ -192,7 +192,7 @@ async def brozzle(self: Bot, user: User, ran, args):
 @bot.add_argument("--ensure-ruleset", default = None)
 @bot.add_argument("arg", nargs = "?")
 @bot.add_argument("pattern")
-@bot.add_argument("setting", choices = ("ua", "custom_js", "skip", "no_skip", "accept", "reject"))
+@bot.add_argument("setting", choices = ("ua", "user_agent", "custom_js", "skip", "no_skip", "accept", "reject"))
 @bot.add_argument("job_id")
 @bot.argparse("!addrule")
 @bot.command({"!addrule"}, required_modes = "+@")
@@ -214,15 +214,17 @@ async def addrule(self: Bot, user: User, ran, args):
         elif args.setting in ("accept", "reject"):
             key = "accept"
             payload = (args.setting == "accept")
-        elif args.setting == "ua":
+        elif args.setting in ("ua", "user_agent"):
             key = "ua"
             try:
                 payload = select_ua(args.arg)
             except ValueError:
                 raise CustomMessageException("Sorry, but that is not a valid user agent. Choices include: " + ", ".join(PRESET_USER_AGENTS.keys()) + ", ".join(DYNAMIC_USER_AGENTS))
         elif args.setting == "custom_js":
+            if "@" not in user.modes:
+                raise CustomMessageException("Sorry, but only operators can include custom JavaScript.")
             key = "custom_js"
-            raise CustomMessageException("Sorry, but TheTechRobo forgot to implement this.")
+            payload = await fetch_custom_js(args.arg)
         else:
             raise RuntimeError("Unreachable code")
         nid, nidx = await queue.create_job_rule(args.job_id, key, args.add_before, db.JobRule(args.pattern, payload), args.ensure_ruleset)
@@ -231,30 +233,33 @@ async def addrule(self: Bot, user: User, ran, args):
 @bot.add_argument("--index", action = "store_true")
 @bot.add_argument("--ensure-ruleset", default = None)
 @bot.add_argument("pattern_or_index")
-@bot.add_argument("setting", choices = ("ua", "custom_js", "skip", "accept"))
+@bot.add_argument("setting", choices = ("ua", "user_agent", "custom_js", "skip", "accept"))
 @bot.add_argument("job_id")
 @bot.argparse("!delrule")
 @bot.command("!delrule", required_modes = "+@")
 async def delrule(self: Bot, user: User, ran, args):
+    key = args.setting
+    if key == "user_agent":
+        key = "ua"
     async with ENGINE.begin() as conn:
         queue = db.Connection(conn)
         if args.index:
-            ruleset_id, old_rule = await queue.remove_job_rule(args.job_id, args.setting, int(args.pattern_or_index), args.ensure_ruleset)
-            message = f"Removed {args.setting} rule {old_rule} (new ruleset ID: {ruleset_id})."
+            ruleset_id, old_rule = await queue.remove_job_rule(args.job_id, key, int(args.pattern_or_index), args.ensure_ruleset)
+            message = f"Removed {key} rule {old_rule} (new ruleset ID: {ruleset_id})."
         else:
-            ruleset_id, num_removed = await queue.remove_job_rules_by_scope(args.job_id, args.setting, args.pattern_or_index, args.ensure_ruleset)
+            ruleset_id, num_removed = await queue.remove_job_rules_by_scope(args.job_id, key, args.pattern_or_index, args.ensure_ruleset)
             if num_removed == 0:
                 raise CustomMessageException("No rule with that pattern was found.")
             s = "" if num_removed == 1 else "s"
-            message = f"Removed {num_removed} {args.setting} rule{s} (new ruleset ID: {ruleset_id})."
+            message = f"Removed {num_removed} {key} rule{s} (new ruleset ID: {ruleset_id})."
     yield message
 
-@bot.command({"!concurrency", "!con"})
+@bot.command({"!concurrency", "!con"}, required_modes = "+@")
 async def concurrency(self: Bot, user: User, ran, job_id, num):
     job_id = db.parse_id(job_id)
     try:
         num = int(num)
-        assert num > 0
+        assert num >= 0
     except (ValueError, AssertionError):
         yield "Sorry, but concurrency must be a positive integer."
         return
@@ -289,7 +294,7 @@ async def status(self: Bot, user: User, ran, *jobs):
                 else:
                     yield f"There are currently {count} active jobs."
 
-@bot.command({"!explain", "!e"})
+@bot.command({"!explain", "!e"}, required_modes = "+@")
 async def explain(self: Bot, user: User, ran, id, *reason):
     id = db.parse_id(id)
     async with ENGINE.begin() as conn:
@@ -359,8 +364,8 @@ async def page(self: Bot, user: User, ran, page_id, action, arg = None):
     async with ENGINE.connect() as conn:
         queue = db.Connection(conn)
         if arg:
-            if "@" not in user.modes:
-                yield "Sorry, but only operators can update page metadata."
+            if "+" not in user.modes and "@" not in user.modes:
+                yield "Sorry, but only voiced users can update page metadata."
                 return
             if action == "status":
                 ns = model.PageStatus[arg.upper()]

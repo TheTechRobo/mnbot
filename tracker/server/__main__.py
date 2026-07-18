@@ -14,7 +14,8 @@ from bot2h import Format, SendOnlyBot, Colour
 
 import sqlalchemy
 
-logging.basicConfig(level=logging.INFO)
+#db.logger.setLevel(logging.INFO)
+logging.basicConfig(level = logging.INFO, format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 INFO_URL = os.environ['INFO_URL']
 TRACKER_BASE_URL = os.environ['TRACKER_BASE_URL'].rstrip("/")

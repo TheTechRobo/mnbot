@@ -37,7 +37,7 @@
 			<ul>
 				<li class="res-settings">
 					<b>Applied settings: </b>
-					{{ macros.build_settings(attempt.applied_settings) }}
+					{{ macros.build_settings(attempt.applied_settings, false) }}
 				</li>
 				{% if attempt.error %}
 					<li>
@@ -78,6 +78,16 @@
 							<br />
 							<small>Click to enlarge image</small>
 						</a>
+					</li>
+				{% endif %}
+				{% if attempt.results.custom_js_result %}
+					<li class="res-cjs">
+						<details style="margin-bottom: 0">
+							<summary>
+								<b>Custom JS result: </b>
+							</summary>
+							<pre>{{ attempt.results.custom_js_result }}</pre>
+						</details>
 					</li>
 				{% endif %}
 				<li class="res-outlinks">

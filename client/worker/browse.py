@@ -451,7 +451,7 @@ def main():
                 write_message("screenshot", screenshot)
 
             if result.custom_js_screenshot:
-                write_message("cjs_screenshot", {"full": result.custom_js_screenshot})
+                write_message("cjs_screenshot", result.custom_js_screenshot)
             if jsr := result.custom_js:
                 write_message("custom_js", result.custom_js)
                 if jsr['status'] != "success":

@@ -4,6 +4,7 @@ import os
 import base64
 import dataclasses
 import datetime
+import json
 
 import sqlalchemy, sqlalchemy.ext.asyncio, sqlalchemy.dialects.postgresql
 
@@ -48,6 +49,7 @@ class JobInfoPacket:
 class ResultsInfoPacket:
     screenshot: model.UUID | None = None
     cjs_screenshot: model.UUID | None = None
+    custom_js_result: dict | None = None
     outlinks: list[str] | None = None
     requisites: list | None = None
     status_code: int | None = None
@@ -139,21 +141,11 @@ def route_with_json(route, **kwargs):
         )(html_cb)
     return inner
 
-@route_with_json("/claims")
-async def claims(html):
-    claims = QUEUE.claimed()
-    if html:
-        return await render_template("pending.j2", pending = claims, adj = "Claimed")
-    claims = []
-    async for item in QUEUE.claimed():
-        claims.append(item)
-    return {"status": 200, "claims": claims}
-
 @route_with_json("/page/<page_id>")
 async def single_page(page_id, html):
     q = sqlalchemy.select(model.pages).where(model.pages.c.page_id == page_id)
     attempt_q = (
-        sqlalchemy.select(model.attempts, *model.job_ruleset_columns)
+        sqlalchemy.select(model.attempts, model.job_rulesets.c.job_ruleset_id, *model.job_ruleset_columns)
         .select_from(model.attempts)
         .join(model.job_rulesets, model.attempts.c.ruleset_id == model.job_rulesets.c.job_ruleset_id)
         .where(model.attempts.c.page_id == page_id)
@@ -189,6 +181,8 @@ async def single_page(page_id, html):
                         results.screenshot = result.result_id
                     case model.ResultType.STATUS_CODE:
                         results.status_code = result.payload
+                    case model.ResultType.CUSTOM_JS:
+                        results.custom_js_result = result.payload
             ruleset = db.JobRuleset.from_row(row)
             applied_settings = db.PageSettings.from_ruleset(page_packet.url, ruleset)
             page_packet.all_attempts.append(AttemptInfoPacket(
@@ -340,44 +334,47 @@ async def test_ruleset(job_id, ruleset_id, html):
         settings = db.PageSettings.from_ruleset(url, ruleset)
     if html:
         return await render_template_string(
-            '{{ warning|safe }} URL: <code>{{ url }}</code> <br /> {% import "macros.j2" as macros %} {{ macros.build_settings(settings) }}',
+            '{{ warning|safe }} URL: <code>{{ url }}</code> <br /> {% import "macros.j2" as macros %} {{ macros.build_settings(settings, true) }}',
             settings = settings,
             url = url,
             warning = warning,
         )
     return {"status": 200, "settings": settings}
 
-@app.route("/item/<id>/requisites")
+@app.route("/page/<id>/requisites")
 async def requisites(id):
-    item = await QUEUE.get(id)
-    if not item:
-        return "", {"content-type": "text/plain"}
-    return get_requisites(item), {"content-type": "text/plain"}
+    return get_requisites(id), {"content-type": "application/json"}
 
-async def get_requisites(item):
-    async for result in QUEUE.get_results(item):
-        if result.type == "requisites":
-            for requisite in result.data:
-                for entry in requisite['chain']:
-                    if req := entry['request']:
-                        if req['url'].startswith("http"):
-                            yield req['url'] + "\n"
-    yield "\nEOF"
+async def get_requisites(page_id):
+    yield "["
+    q = sqlalchemy.select(model.results.c.payload).where(model.results.c.page_id == page_id).where(model.results.c.type == model.ResultType.REQUISITES)
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        async with conn.stream(q) as iter:
+            async for row in iter:
+                result = row.scalar()
+                for requisite in result:
+                    for entry in requisite['chain']:
+                        if req := entry['request']:
+                            if req['url'].startswith("http"):
+                                yield json.dumps(req['url']) + ", "
+    yield "]"
 
-@app.route("/item/<id>/outlinks")
+@app.route("/page/<id>/outlinks")
 async def outlinks(id):
-    item = await QUEUE.get(id)
-    if not item:
-        return "", {"content-type": "text/plain"}
-    return get_outlinks(item), {"content-type": "text/plain"}
+    return get_outlinks(id), {"content-type": "text/plain"}
 
-async def get_outlinks(item):
-    async for result in QUEUE.get_results(item):
-        if result.type == "outlinks":
-            for outlink in result.data:
-                if outlink.startswith("http"):
-                    yield outlink + "\n"
-    yield "\nEOF"
+async def get_outlinks(page_id):
+    yield "["
+    q = sqlalchemy.select(model.results.c.payload).where(model.results.c.page_id == page_id).where(model.results.c.type == model.ResultType.OUTLINKS)
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        async with conn.stream(q) as iter:
+            async for row in iter:
+                result = row.scalar()
+                for outlink in result:
+                    yield json.dumps(outlink) + ", "
+    yield "]"
 
 @app.route("/screenshot/<id>/full.jpg")
 @app.route("/screenshot/<id>/thumb.jpg")

@@ -7,7 +7,7 @@
 	{% endif %}
 {% endmacro %}
 
-{% macro build_settings(settings) %}
+{% macro build_settings(settings, include_accept) %}
 	<ul>
 		<li><b>User agent: </b>{{ build_ua(settings.ua) }}</li>
 		{% if settings.custom_js %}
@@ -20,18 +20,20 @@
 		{% else %}
 			<li><b>Custom JavaScript: </b>None</li>
 		{% endif %}
-		{% if settings.skip %}
-			<li><b data-tooltip="Instead of dequeuing this page, its status will be changed to SKIPPED.">Skip this page</b></li>
-		{% else %}
-			<li>Do not skip this page</li>
-		{% endif %}
-		<li><span data-tooltip="NB: This has no effect for pages already in the queue.">
-			{% if settings.accept %}
-				Accept this URL into the queue
+		{% if include_accept %}
+			{% if settings.skip %}
+				<li><b data-tooltip="Instead of dequeuing this page, its status will be changed to SKIPPED.">Skip this page</b></li>
 			{% else %}
-				Reject this URL from the queue
+				<li>Do not skip this page</li>
 			{% endif %}
-		</span></li>
+			<li><span data-tooltip="NB: This has no effect for pages already in the queue.">
+				{% if settings.accept %}
+					Accept this URL into the queue
+				{% else %}
+					Reject this URL from the queue
+				{% endif %}
+			</span></li>
+		{% endif %}
 	</ul>
 {% endmacro %}
 
@@ -54,7 +56,7 @@
 					<b>Default (all pages): </b>{{ build_rule_value(type, col.default) }}
 				</li>
 				{% for rule in col.rules %}
-					<li><b>URLs matching <code>{{ rule.scope }}</code></b> (index {{ loop.index0 }}): {{ build_rule_value(type, col.default) }}</li>
+					<li><b>URLs matching <code>{{ rule.scope }}</code></b> (index {{ loop.index0 }}): {{ build_rule_value(type, rule.payload) }}</li>
 				{% endfor %}
 			</ul>
 		</details>
