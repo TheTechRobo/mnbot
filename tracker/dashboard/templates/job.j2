@@ -58,7 +58,7 @@
 		<p>
 			<small>Currently-loaded ruleset ID: {{ job.ruleset.job_ruleset_id }}</small>
 		</p>
-		<form onsubmit="return false;" id="ruletester">
+		<form onsubmit="return false;">
 			<fieldset role="group">
 				<input id="rsid" name="rs" type="hidden" value="{{ job.ruleset.job_ruleset_id }}" />
 				<input name="url" id="rsurl" placeholder="URL" />
@@ -72,18 +72,20 @@
 
 <section id="pages">
 	<h3><span class="shortcut">P</span>ages</h3>
-	<section id="claimed">
-		<h4>Claimed Pages</h4>
-		<iframe src="{{ url_for('job_claimed', job_id = job.id) }}" style="width: 100%" height=400>
-			Your browser does not support iframes.
-		</iframe>
-	</section>
-	<section id="pending">
-		<h4>Pending Pages</h4>
-		<iframe src="{{ url_for('job_pending', job_id = job.id) }}" style="width: 100%" height=400>
-			Your browser does not support iframes.
-		</iframe>
-	</section>
+	{% if status != "DONE" %}
+		<section id="claimed">
+			<h4>Claimed Pages</h4>
+			<iframe src="{{ url_for('job_claimed', job_id = job.id) }}" style="width: 100%" height=400>
+				Your browser does not support iframes.
+			</iframe>
+		</section>
+		<section id="pending">
+			<h4>Pending Pages</h4>
+			<iframe src="{{ url_for('job_pending', job_id = job.id) }}" style="width: 100%" height=400>
+				Your browser does not support iframes.
+			</iframe>
+		</section>
+	{% endif %}
 	<section id="all">
 		<h4>All Pages</h4>
 		<a href="{{ url_for('job_pages', job_id = job.id) }}">List all pages</a> (in order of creation)

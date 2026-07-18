@@ -5,6 +5,7 @@ import base64
 import dataclasses
 import datetime
 import json
+import urlcanon
 
 import sqlalchemy, sqlalchemy.ext.asyncio, sqlalchemy.dialects.postgresql
 
@@ -325,19 +326,22 @@ async def job_pages(job_id, html):
 @route_with_json("/ruleset/<job_id>/<ruleset_id>/test")
 async def test_ruleset(job_id, ruleset_id, html):
     url = request.args['url']
+    normalized = str(urlcanon.whatwg(url))
     async with ENGINE.connect() as conn:
         conn = await conn.execution_options(postgresql_readonly = True)
         queue = db.Connection(conn)
         latest_ruleset = await queue.get_job_ruleset(job_id)
-        warning = "<b>Warning: You are not querying the latest ruleset.</b><br />" if str(latest_ruleset.job_ruleset_id) != ruleset_id else ""
+        warning = "<p><b>Warning: You are not querying the latest ruleset.</b></p>" if str(latest_ruleset.job_ruleset_id) != ruleset_id else ""
+        if url != normalized:
+            warning += "<p>When extracting outlinks, this URL will be normalized to <code>{{ normalized|e }}</code>.</p>"
         ruleset = await queue.get_ruleset(ruleset_id)
         settings = db.PageSettings.from_ruleset(url, ruleset)
     if html:
         return await render_template_string(
-            '{{ warning|safe }} URL: <code>{{ url }}</code> <br /> {% import "macros.j2" as macros %} {{ macros.build_settings(settings, true) }}',
+            warning + 'URL: <code>{{ url }}</code> <br /> {% import "macros.j2" as macros %} {{ macros.build_settings(settings, true) }}',
             settings = settings,
             url = url,
-            warning = warning,
+            normalized = normalized,
         )
     return {"status": 200, "settings": settings}
 

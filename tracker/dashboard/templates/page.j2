@@ -38,6 +38,7 @@
 				<li class="res-settings">
 					<b>Applied settings: </b>
 					{{ macros.build_settings(attempt.applied_settings, false) }}
+					(Ruleset: {{ attempt.ruleset.job_ruleset_id }})
 				</li>
 				{% if attempt.error %}
 					<li>

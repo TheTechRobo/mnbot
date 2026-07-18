@@ -77,6 +77,8 @@ async def fetch_custom_js(url):
         traceback.print_exc()
         raise CustomMessageException(f"Failed to retrieve custom JS ({type(e)} was raised).")
 
+@bot.add_argument("--accept", default = None)
+@bot.add_argument("--depth", default = "0")
 @bot.add_argument("--concurrency", "-c", type = int, default = 1)
 @bot.add_argument(
     "--user-agent", "-u",
@@ -92,6 +94,15 @@ async def fetch_custom_js(url):
 @bot.argparse("!brozzle")
 @bot.command({"!b", "!brozzle"}, required_modes="+@")
 async def brozzle(self: Bot, user: User, ran, args):
+    try:
+        if args.depth in ("inf", "infinity"):
+            depth = None
+        else:
+            depth = int(args.depth)
+            assert depth >= 0
+    except (ValueError, AssertionError):
+        raise CustomMessageException("Invalid depth value! Please supply either an integer >= 0 or 'inf' for no limit.")
+
     metadata = {}
     if args.nice < -10:
         if "@" not in user.modes:
@@ -117,6 +128,9 @@ async def brozzle(self: Bot, user: User, ran, args):
             skip = db.RulesetColumn(False, []),
             accept = db.RulesetColumn(False, []),
     )
+    if args.accept is not None:
+        db.regex.compile(args.accept)
+        initial_ruleset.accept.rules.append(db.JobRule(args.accept, True))
 
     job_id = db.generate_id()
     job = db.JobCreation(
@@ -128,6 +142,7 @@ async def brozzle(self: Bot, user: User, ran, args):
         nice = args.nice,
         note = args.explanation,
         initial_ruleset = initial_ruleset,
+        depth = depth,
     )
 
     async with ENGINE.connect() as conn:
@@ -420,6 +435,8 @@ async def handler(self: Bot, command, user: User, e):
         return f"{user.nick}: {RED}Serialization failure! Please try again."
     elif isinstance(e, CustomMessageException):
         return f"{user.nick}: {e.msg}"
+    elif isinstance(e, db.regex.error):
+        return f"{user.nick}: Regex compilation error! Note: mnbot uses the Python 'regex' module."
     else:
         print("Exception occurred!")
         traceback.print_exc()

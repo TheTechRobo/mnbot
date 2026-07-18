@@ -112,7 +112,26 @@ async def store(ctx: HandlerContext, *, result_id, attempt_id, type, payload):
     if type == "cjs_screenshot":
         type = "custom_js_screenshot"
     await pipeline.create_result(attempt_id, result_id, model.ResultType[type.upper()], payload)
-    return 201, {"new_id": str(result_id)}
+    aux = {}
+    if type == "outlinks":
+        q = (
+            sqlalchemy.select(model.job_rulesets, model.pages.c.job_id, model.pages.c.page_id)
+            .select_from(model.attempts)
+            .where(model.attempts.c.attempt_id == attempt_id)
+            .join(model.job_rulesets, model.job_rulesets.c.job_ruleset_id == model.attempts.c.ruleset_id)
+            .join(model.pages, model.pages.c.page_id == model.attempts.c.page_id)
+        )
+        row = (await pipeline.conn.execute(q)).one()
+        ruleset = db.JobRuleset.from_row(row)
+        accepted_urls = set()
+        for url in payload:
+            settings = db.PageSettings.from_ruleset(url, ruleset)
+            if settings.accept:
+                accepted_urls.add(url)
+        await pipeline.parent.create_pages(row.job_id, (db.PageCreation(db.generate_id(), i, row.page_id) for i in accepted_urls))
+        aux = {"urls_added": len(accepted_urls)}
+
+    return 201, {"new_id": str(result_id)} | aux
 
 @handler("Item:finish")
 async def finish(ctx: HandlerContext, *, attempt_id) -> Response:
