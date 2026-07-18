@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+import shutil
 import logging
 import typing
 
@@ -123,6 +124,8 @@ class Websocket:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
 
     async def ping(self):
-        status, resp = await self._send("System:ping")
+        space = shutil.disk_usage("/")
+        payload = dict(free = space.free, used = space.used, total = space.total)
+        status, resp = await self._send("System:ping", {"disk": payload})
         if status != 200:
             raise RuntimeError(f"Bad response from server: {status} {resp}")

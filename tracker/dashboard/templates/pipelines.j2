@@ -1,0 +1,38 @@
+{% extends "skeleton.j2" %}
+
+{% block title %} Active pipelines {% endblock %}
+
+{% block content %}
+
+<h2>Active pipelines</h2>
+
+<section id="item-list">
+	<p>Since the tracker was last started:</p>
+	<div class="overflow-auto">
+		<table>
+			<tr>
+				<th>Pipeline</th>
+				<th>Last heartbeat</th>
+				<th>Disk space</th>
+			</tr>
+			{% for pipeline, last, disk in pipelines %}
+				<tr>
+					<td>{{ pipeline }}</td>
+					<td>
+						{% if last.days > 0 %}
+							<span class="error">over {{ last.days }} day{% if last.days != 1 %}s{% endif %} ago</span>
+						{% elif last.seconds < 60 %}
+							less than a minute ago
+						{% else %}
+							about {{ (last.seconds / 60)|round + 1 }} minutes ago
+						{% endif %}
+					</td>
+					<td>{{ disk[0] }} GiB free of {{ disk[1] }} GiB</td>
+				</tr>
+			{% endfor %}
+		</table>
+	</div>
+	<p>(Live update is not implemented. Refresh the page for current statistics.)</p>
+</section>
+
+{% endblock %}

@@ -7,6 +7,8 @@ import json
 import typing
 import logging
 
+import urlcanon
+
 from ..common import model, db
 
 from websockets.asyncio.server import ServerConnection, basic_auth, serve
@@ -41,8 +43,11 @@ def handler(msg_type: str):
 Response: typing.TypeAlias = tuple[int, typing.Optional[dict[str, typing.Any]]]
 HandlerContext = collections.namedtuple("HandlerContext", ["message", "pipeline", "version"])
 
+PIPELINE_HEALTH = {}
+
 @handler("System:ping")
-async def pong(ctx: HandlerContext) -> Response:
+async def pong(ctx: HandlerContext, disk: dict) -> Response:
+    PIPELINE_HEALTH[ctx.pipeline.pipeline_id] = {"ping": int(time.time()), "disk": disk}
     return 204, None
 
 @handler("Item:claim")
@@ -127,7 +132,9 @@ async def store(ctx: HandlerContext, *, result_id, attempt_id, type, payload):
         for url in payload:
             settings = db.PageSettings.from_ruleset(url, ruleset)
             if settings.accept:
-                accepted_urls.add(url)
+                url = urlcanon.parse_url(url)
+                urlcanon.canon.remove_fragment(url)
+                accepted_urls.add(str(url))
         await pipeline.parent.create_pages(row.job_id, (db.PageCreation(db.generate_id(), i, row.page_id) for i in accepted_urls))
         aux = {"urls_added": len(accepted_urls)}
 
@@ -209,13 +216,22 @@ authenticator = basic_auth(
     check_credentials = authenticate
 )
 
+async def request_hook(conn: ServerConnection, request):
+    if request.path == "/health":
+        res = {"status": 200, "pipelines": PIPELINE_HEALTH}
+        r = conn.respond(200, json.dumps(res))
+        del r.headers['Content-Type']
+        r.headers['Content-Type'] = "application/json"
+        return r
+    return await authenticator(conn, request)
+
 async def main():
     global ENGINE
     ENGINE = await db.create_engine()
     async with serve(
         handle_connection,
         "0.0.0.0", 8897,
-        process_request = authenticator,
+        process_request = request_hook,
         max_size=2**25
     ) as server:
         await server.serve_forever()

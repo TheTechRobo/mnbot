@@ -114,58 +114,62 @@
 					{% endif %}
 				</li>
 				<li class="res-requisites">
-					<details>
-						<summary><b>Requisites:</b></summary>
-						<div class="overflow-auto">
-							<table class="striped">
-								<tr>
-									<th>Status</th>
-									<th>Type</th>
-									<th>Category</th>
-									<th>Length</th>
-									<th>Method</th>
-									<th>URL</th>
-								</tr>
-								{% for requisite in attempt.results.requisites %}
-									{% for pair in requisite['chain'] %}
-										<tr>
-											{% if pair.response._type == "Response" %}
-												<td>{{ pair.response.status[0] }} {{ pair.response.status[1] }}</td>
-												<td>{{ pair.response.mimetype or "-" }}</td>
-											{% elif pair.response._type == "Error" %}
-												<td>Error</td>
-												<td>{{ pair.response.text }}</td>
-											{% elif pair.response is none %}
-												<td>None</td>
-												<td>No response</td>
-											{% else %}
-												<td>Unknown - this is a bug</td>
-												<td></td>
-											{% endif %}
-											{% if loop.first %}
-												<td>{{ pair.request.category }}</td>
-											{% else %}
-												<td>Redirect &uarr;</td>
-											{% endif %}
-											{% if pair.response.length is none %}
-												<td>?</td>
-											{% elif pair.response.length is not defined %}
-												<td>n/a</td>
-											{% else %}
-												<td>{{ pair.response.length }}</td>
-											{% endif %}
-											<td>{{ pair.request.method }}</td>
-											<td>
-												<a href="{{ pair.request.url }}">
-													{{ pair.request.url }}
-												</a>
-											</td>
-										</tr>
+					{% if not attempt.results.requisites is none %}
+						<details>
+							<summary><b>Requisites:</b></summary>
+							<div class="overflow-auto">
+								<table class="striped">
+									<tr>
+										<th>Status</th>
+										<th>Type</th>
+										<th>Category</th>
+										<th>Length</th>
+										<th>Method</th>
+										<th>URL</th>
+									</tr>
+									{% for requisite in attempt.results.requisites %}
+										{% for pair in requisite['chain'] %}
+											<tr>
+												{% if pair.response._type == "Response" %}
+													<td>{{ pair.response.status[0] }} {{ pair.response.status[1] }}</td>
+													<td>{{ pair.response.mimetype or "-" }}</td>
+												{% elif pair.response._type == "Error" %}
+													<td>Error</td>
+													<td>{{ pair.response.text }}</td>
+												{% elif pair.response is none %}
+													<td>None</td>
+													<td>No response</td>
+												{% else %}
+													<td>Unknown - this is a bug</td>
+													<td></td>
+												{% endif %}
+												{% if loop.first %}
+													<td>{{ pair.request.category }}</td>
+												{% else %}
+													<td>Redirect &uarr;</td>
+												{% endif %}
+												{% if pair.response.length is none %}
+													<td>?</td>
+												{% elif pair.response.length is not defined %}
+													<td>n/a</td>
+												{% else %}
+													<td>{{ pair.response.length }}</td>
+												{% endif %}
+												<td>{{ pair.request.method }}</td>
+												<td>
+													<a href="{{ pair.request.url }}">
+														{{ pair.request.url }}
+													</a>
+												</td>
+											</tr>
+										{% endfor %}
 									{% endfor %}
-								{% endfor %}
-							</table>
-						</div>
-					</details>
+								</table>
+							</div>
+						</details>
+					{% else %}
+						<em>A requisite list was not submitted.</em>
+					{% endif %}
 				</li>
 			</ul>
 		{% endfor %}

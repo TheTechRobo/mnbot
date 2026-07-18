@@ -4,10 +4,12 @@ import os
 import base64
 import dataclasses
 import datetime
+import time
 import json
 import urlcanon
 
 import sqlalchemy, sqlalchemy.ext.asyncio, sqlalchemy.dialects.postgresql
+import aiohttp
 
 from ..common import db, model
 
@@ -19,17 +21,19 @@ app = EscapingQuart(__name__)
 app.jinja_env.globals.update(isinstance = isinstance)
 
 DOCUMENTATION_URL = os.getenv("DOCUMENTATION_URL")
+TRACKER_HOST = os.getenv("TRACKER_HOST")
 
 NAV = (
     ("/", "Dashboard"),
     #("/claims", "Claims"),
-    #("/pipelines", "Pipelines"),
+    ("/pipelines", "Pipelines"),
     ("/docs", "Documentation"),
 )
 
 async def _setup_engine():
-    global ENGINE
+    global ENGINE, SESSION
     ENGINE = await db.create_engine()
+    SESSION = aiohttp.ClientSession()
 
 app.before_serving(_setup_engine)
 
@@ -389,8 +393,24 @@ async def screenshot(id):
         conn = await conn.execution_options(postgresql_readonly = True)
         res = await conn.scalar(q)
     if not res:
-        return await render_template("error.j2", code = 404, reason = "Screenshot not found", description = "Screenshot was not found.")
+        return await render_template("error.j2", code = 404, reason = "Screenshot not found", description = "Screenshot was not found."), 404
     return base64.b85decode(res), {"Content-Type": "image/jpeg"}
+
+@route_with_json("/pipelines")
+async def pipelines(html):
+    if not TRACKER_HOST:
+        return await render_template("error.j2", reason = "Communication with tracker impossible", description = "The administrator has not set the TRACKER_HOST environment variable.")
+    async with SESSION.get(f"http://{TRACKER_HOST}/health") as resp:
+        assert resp.status == 200
+        r = await resp.json()
+    pipelines = []
+    for pipeline_id, data in r['pipelines'].items():
+        heartbeat_delta = datetime.timedelta(seconds = time.time() - data['ping'])
+        disk = (round(data['disk']['free'] / 1024 / 1024 / 1024, 1), round(data['disk']['total'] / 1024 / 1024 / 1024, 1))
+        pipelines.append((pipeline_id, heartbeat_delta, disk))
+    if html:
+        return await render_template("pipelines.j2", pipelines = pipelines)
+    return {"status": 200, "pipelines": pipelines}
 
 @app.errorhandler(werkzeug.exceptions.HTTPException)
 async def error(e: werkzeug.exceptions.HTTPException):
