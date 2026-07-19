@@ -397,13 +397,13 @@ class Brozzler:
                 custom_js_screenshot = base64.b85encode(self.custom_js_screenshot).decode()
 
         logger.debug("extracting outlinks")
-        outlinks = self.browser.extract_outlinks()
+        outlinks = [outlink for outlink in self.browser.extract_outlinks() if outlink.startswith("http")]
         logger.debug("visiting anchors")
         self.browser.visit_hashtags(final_url, [], outlinks)
 
         with self.websock_thread_lock:
             r = Result(
-                id = self.job.attempt_id,
+                attempt_id = self.job.attempt_id,
                 final_url = final_url,
                 outlinks = list(outlinks),
                 custom_js = custom_js_result,

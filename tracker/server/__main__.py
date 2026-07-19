@@ -135,7 +135,8 @@ async def store(ctx: HandlerContext, *, result_id, attempt_id, type, payload):
                 url = urlcanon.parse_url(url)
                 urlcanon.canon.remove_fragment(url)
                 accepted_urls.add(str(url))
-        await pipeline.parent.create_pages(row.job_id, (db.PageCreation(db.generate_id(), i, row.page_id) for i in accepted_urls))
+        if accepted_urls:
+            await pipeline.parent.create_pages(row.job_id, (db.PageCreation(db.generate_id(), i, row.page_id) for i in accepted_urls))
         aux = {"urls_added": len(accepted_urls)}
 
     return 201, {"new_id": str(result_id)} | aux

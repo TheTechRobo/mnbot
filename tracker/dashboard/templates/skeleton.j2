@@ -29,6 +29,7 @@
 			window.addEventListener("load", (e) => {
 				iframes = Array.from(document.querySelectorAll("iframe"));
 				iframes.forEach( (f) => f.contentWindow.postMessage("ready") );
+				if (window.parent !== window) window.parent.postMessage(JSON.stringify({type: "contentHeight", height: document.body.scrollHeight + 10}));
 			});
 
 			window.addEventListener("message", (e) => {

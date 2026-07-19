@@ -299,6 +299,10 @@ async def job_pending(job_id, html):
         .join(model.attempts, model.attempts.c.page_id == model.pages.c.page_id, isouter = True)
         .where(model.pages.c.job_id == job_id)
         .where(model.pages_dequeue_filter)
+        .where(
+            (db.Connection._page_depth(model.pages.c.page_id) <= db.Connection._job_depth(job_id))
+            | (db.Connection._job_depth(job_id) == None)
+        )
         .group_by(model.pages.c.page_id)
         .order_by(*model.pages_dequeue_order)
     )
@@ -355,33 +359,53 @@ async def requisites(id):
 
 async def get_requisites(page_id):
     yield "["
-    q = sqlalchemy.select(model.results.c.payload).where(model.results.c.page_id == page_id).where(model.results.c.type == model.ResultType.REQUISITES)
+    q = (
+            sqlalchemy.select(model.results.c.payload)
+            .select_from(model.attempts)
+            .join(model.results, model.results.c.attempt_id == model.attempts.c.attempt_id)
+            .where(model.attempts.c.page_id == page_id)
+            .where(model.results.c.type == model.ResultType.REQUISITES)
+    )
+    started = False
     async with ENGINE.connect() as conn:
         conn = await conn.execution_options(postgresql_readonly = True)
         async with conn.stream(q) as iter:
             async for row in iter:
-                result = row.scalar()
+                result = row[0]
                 for requisite in result:
                     for entry in requisite['chain']:
                         if req := entry['request']:
                             if req['url'].startswith("http"):
-                                yield json.dumps(req['url']) + ", "
+                                if started:
+                                    yield ", "
+                                started = True
+                                yield json.dumps(req['url'])
     yield "]"
 
 @app.route("/page/<id>/outlinks")
 async def outlinks(id):
-    return get_outlinks(id), {"content-type": "text/plain"}
+    return get_outlinks(id), {"content-type": "application/json"}
 
 async def get_outlinks(page_id):
     yield "["
-    q = sqlalchemy.select(model.results.c.payload).where(model.results.c.page_id == page_id).where(model.results.c.type == model.ResultType.OUTLINKS)
+    q = (
+            sqlalchemy.select(model.results.c.payload)
+            .select_from(model.attempts)
+            .join(model.results, model.results.c.attempt_id == model.attempts.c.attempt_id)
+            .where(model.attempts.c.page_id == page_id)
+            .where(model.results.c.type == model.ResultType.OUTLINKS)
+    )
+    started = False
     async with ENGINE.connect() as conn:
         conn = await conn.execution_options(postgresql_readonly = True)
         async with conn.stream(q) as iter:
             async for row in iter:
-                result = row.scalar()
+                result = row[0]
                 for outlink in result:
-                    yield json.dumps(outlink) + ", "
+                    if started:
+                        yield ", "
+                    started = True
+                    yield json.dumps(outlink)
     yield "]"
 
 @app.route("/screenshot/<id>/full.jpg")
@@ -406,8 +430,9 @@ async def pipelines(html):
     pipelines = []
     for pipeline_id, data in r['pipelines'].items():
         heartbeat_delta = datetime.timedelta(seconds = time.time() - data['ping'])
+        heartbeat_delta_dict = {"days": heartbeat_delta.days, "seconds": heartbeat_delta.seconds}
         disk = (round(data['disk']['free'] / 1024 / 1024 / 1024, 1), round(data['disk']['total'] / 1024 / 1024 / 1024, 1))
-        pipelines.append((pipeline_id, heartbeat_delta, disk))
+        pipelines.append((pipeline_id, heartbeat_delta_dict, disk))
     if html:
         return await render_template("pipelines.j2", pipelines = pipelines)
     return {"status": 200, "pipelines": pipelines}

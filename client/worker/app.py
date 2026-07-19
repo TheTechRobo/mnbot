@@ -310,7 +310,7 @@ async def main():
                     message = f"Caught exception!\n{fmt.getvalue()}"
                 await ws.fail_item(attempt_id, message, fatal)
             else:
-                logger.info(f"task {id} was successful!")
+                logger.info(f"task {attempt_id} was successful!")
                 await ws.finish_item(attempt_id)
                 logger.debug("creating cleanup task")
                 task = asyncio.create_task(warcprox_cleanup())

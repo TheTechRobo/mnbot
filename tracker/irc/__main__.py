@@ -424,6 +424,10 @@ async def page(self: Bot, user: User, ran, page_id, action, arg = None):
                 yield f"{action} is not a valid query."
                 return
 
+@bot.command("!df")
+async def df(self: Bot, user: User, ran):
+    yield f"See {TRACKER_BASE_URL}/pipelines for pipeline information."
+
 RED = Colour.make_colour(Colour.RED)
 @bot.exception_handler
 async def handler(self: Bot, command, user: User, e):
