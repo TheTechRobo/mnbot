@@ -25,7 +25,7 @@
 			</ul>
 			<footer>
 				<p style="text-align: right; margin-bottom: 0" class="low-importance">
-					{{ job_id }}
+					<a href="{{ url_for('single_job', job_id = job_id) }}">{{ job_id }}</a>
 				</p>
 			</footer>
 		</article>

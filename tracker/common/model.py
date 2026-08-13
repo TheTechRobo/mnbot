@@ -48,6 +48,9 @@ pipelines = Table(
     Column("pipeline_id", sqlalchemy.Text, primary_key = True),
     Column("pipeline_secret", sqlalchemy.Text),
     Column("matchonly", sqlalchemy.Boolean),
+    Column("last_checkin", sqlalchemy.TIMESTAMP(timezone = True), nullable = True),
+    Column("disk_free_bytes", sqlalchemy.BigInteger, nullable = True),
+    Column("disk_total_bytes", sqlalchemy.BigInteger, nullable = True),
 )
 
 # Pipeline tags, similar to ArchiveBot's substring match for selecting pipelines to run on

@@ -5,7 +5,9 @@ The functions in this file that take a connection parameter do not automatically
 Transaction management is left to the caller.
 """
 
+import datetime
 import dataclasses
+import enum
 import typing
 import os
 import regex
@@ -151,7 +153,7 @@ class Counts:
     claimed_pages: int
 
 @dataclasses.dataclass
-class PipelineInfo:
+class PipelineSlotInfo:
     matchonly: bool
     current_claim: tuple[model.UUID | None, model.ClaimLock | None]
 
@@ -161,6 +163,28 @@ class PendingPage:
     payload: str
     ruleset_id: model.UUID
     page_settings: "PageSettings"
+
+@dataclasses.dataclass
+class PipelineHealth:
+    disk_free_bytes: int
+    disk_total_bytes: int
+    last_checkin: datetime.datetime
+
+@dataclasses.dataclass
+class PipelineInfo:
+    pipeline_id: model.UUID
+    matchonly: bool
+    pipeline_health: PipelineHealth | None
+
+class PipelineHealthStatus(enum.Enum):
+    HEALTHY = 0
+    """All pipelines are healthy."""
+
+    DEGRADED = 1
+    """One or more pipelines are unhealthy."""
+
+    UNHEALTHY = 2
+    """All pipelines are unhealthy."""
 
 def _find_claimable_job_q(pipeline: str | None, matchonly: bool, include_existing: model.UUID | None, limit: bool):
     """
@@ -207,12 +231,22 @@ class JobRule[T]:
     def for_db(self):
         return (self.scope, self.payload)
 
+    def matches(self, url):
+        return bool(self._compiled_scope.search(url, timeout = 15))
+
 RulesetPayload = typing.TypeVar("RulesetPayload")
 
 @dataclasses.dataclass
 class RulesetColumn[RulesetPayload]:
     default: RulesetPayload
     rules: list[JobRule[RulesetPayload]]
+
+    def compute_for(self, url: str) -> RulesetPayload:
+        item = self.default
+        for rule in self.rules:
+            if rule.matches(url):
+                item = rule.payload
+        return item
 
 @dataclasses.dataclass
 class JobRuleset:
@@ -261,10 +295,7 @@ class PageSettings:
     def from_ruleset(cls, url: str, ruleset: JobRuleset) -> typing.Self:
         kwargs = {}
         for key, column in (("ua", ruleset.ua), ("custom_js", ruleset.custom_js), ("skip", ruleset.skip), ("accept", ruleset.accept)):
-            kwargs[key] = column.default
-            for rule in column.rules:
-                if rule.compiled_scope.search(url, timeout = 15):
-                    kwargs[key] = rule.payload
+            kwargs[key] = column.compute_for(url)
         return cls(**kwargs)
 
     def as_dict(self):
@@ -377,6 +408,9 @@ class Connection:
                 # Depth is overwritten by the INSERT trigger.
                 depth = -1,
             )
+        if not values:
+            # Empty iterator
+            return {}
         res = await self.conn.execute(q, values)
         # In case there are existing items, give the actual page IDs to the caller
         id_mapping: dict[model.UUID, model.UUID] = {}
@@ -735,7 +769,12 @@ class Connection:
         )
 
     @classmethod
-    def _job_depth(cls, job_id: model.UUID):
+    def _job_depth(cls, job_id: model.UUID | sqlalchemy.Column):
+        """
+        Returns an SQLAlchemy scalar subquery that can be used to get the job depth.
+        This subquery will either return an integer or NULL. If NULL is returned,
+        there is no restriction on job depth.
+        """
         return (
             sqlalchemy.select(model.jobs.c.depth)
             .where(model.jobs.c.job_id == job_id)
@@ -776,6 +815,52 @@ class Connection:
                 settings = PageSettings.from_ruleset(payload, ruleset)
                 yield PendingPage(page_id, payload, ruleset.job_ruleset_id, settings)
 
+    MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
+    MAX_HEARTBEAT_AGE = datetime.timedelta(seconds = 120)
+
+    async def get_pipelines(self, *pipeline_ids) -> list[PipelineInfo]:
+        """
+        If no pipelines are specified, all pipelines are returned.
+        """
+        q = sqlalchemy.select(model.pipelines)
+        if pipeline_ids:
+            q = q.where(model.pipelines.c.pipeline_id.in_(pipeline_ids))
+        res = await self.conn.execute(q)
+        pipelines = []
+        for row in res:
+            # If last_checkin is null, the other columns will be null. Assume then that the pipeline has never been used yet, and don't include it.
+            pipeline_health = None
+            if row.last_checkin:
+                pipeline_health = PipelineHealth(row.disk_free_bytes, row.disk_total_bytes, row.last_checkin)
+            pipelines.append(PipelineInfo(matchonly = row.matchonly, pipeline_health = pipeline_health, pipeline_id = row.pipeline_id))
+        return pipelines
+
+    async def get_pipeline_health_status(self, min_free_bytes: int | None = None, max_age: datetime.timedelta | None = None) -> PipelineHealthStatus:
+        if min_free_bytes is None:
+            min_free_bytes = self.MIN_FREE_BYTES
+        if max_age is None:
+            max_age = self.MAX_HEARTBEAT_AGE
+        has_bad = False
+        has_good = False
+        pipelines = await self.get_pipelines()
+        for row in pipelines:
+            health = row.pipeline_health
+            if not health:
+                continue
+            if (health.disk_free_bytes < min_free_bytes) or (datetime.datetime.now(datetime.UTC) - max_age > health.last_checkin):
+                has_bad = True
+            else:
+                has_good = True
+        match (has_good, has_bad):
+            case (True, False):
+                return PipelineHealthStatus.HEALTHY
+            case (False, True):
+                return PipelineHealthStatus.UNHEALTHY
+            case (True, True):
+                return PipelineHealthStatus.DEGRADED
+            case (False, False):
+                return PipelineHealthStatus.HEALTHY
+
 class Pipeline:
     """
     Note: The connection is not designed to survive an error that is not
@@ -791,7 +876,7 @@ class Pipeline:
         self.pipeline_id = pipeline_id
 
     @_wrap_serialization_failure
-    async def info(self, slot: int) -> PipelineInfo:
+    async def info(self, slot: int) -> PipelineSlotInfo:
         """
         Gets pipeline information and the current claim for a pipeline.
         """
@@ -807,7 +892,7 @@ class Pipeline:
         if not data:
             raise NoSuchPipelineError("Pipeline slot should be registered before use")
         matchonly, job_id, lock = data
-        return PipelineInfo(matchonly = matchonly, current_claim = (job_id, lock))
+        return PipelineSlotInfo(matchonly = matchonly, current_claim = (job_id, lock))
 
     async def _find_claimable_job(self, matchonly: bool, include_existing: model.UUID | None) -> model.UUID | None:
         """
@@ -1082,3 +1167,21 @@ class Pipeline:
             payload = payload,
         )
         await self.conn.execute(q, [val])
+
+    @_wrap_serialization_failure
+    async def heartbeat(self, free_bytes: int, total_bytes: int):
+        timestamp = datetime.datetime.now(datetime.UTC)
+        q = (
+                sqlalchemy.update(model.pipelines)
+                .where(model.pipelines.c.pipeline_id == self.pipeline_id)
+                .values(last_checkin = timestamp, disk_free_bytes = free_bytes, disk_total_bytes = total_bytes)
+        )
+        await self.conn.execute(q)
+
+    @_wrap_serialization_failure
+    async def get_last_heartbeat(self) -> PipelineHealth | None:
+        """
+        This will return null if the pipeline has never had a heartbeat yet.
+        """
+        res = await self.parent.get_pipelines(self.pipeline_id)
+        return res[0].pipeline_health

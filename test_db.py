@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import os
 import dataclasses
 
@@ -281,6 +282,24 @@ async def test_pipeline(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         expected_payloads = ["one", "two", None, "three", None]
         assert found_pages == expected_pages
         assert found_payloads == expected_payloads
+
+@_test
+async def test_empty_create_pages_set(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests that calling create_pages with no arguments does nothing.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job_id = await make_job(q, concurrency = 1)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+        assert (await q.create_pages(job_id, [])) == {}
+        assert (await q.create_pages(job_id, (i for i in []))) == {}
+        await conn.commit()
+        with pytest.raises(db.JobExhausted):
+            await pipe.find_claim_page("", 0)
+        await q.update_job_status(job_id)
+        assert (await q.get_job_counts()) == 0
 
 @_test
 async def test_retries(engine: sqlalchemy.ext.asyncio.AsyncEngine):
@@ -824,6 +843,34 @@ async def test_many_skipped_jobs(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         with pytest.raises(db.JobExhausted):
             await pipe.find_claim_page("", 0)
 
+gb = lambda b : b * 1024 * 1024 * 1024
+
+@_test
+async def test_pipeline_heartbeat(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe")
+
+        assert await pipe.get_last_heartbeat() is None
+        await pipe.heartbeat(gb(1), gb(20))
+        res = await pipe.get_last_heartbeat()
+        assert res and res == db.PipelineHealth(gb(1), gb(20), res.last_checkin)
+        assert await q.get_pipeline_health_status(gb(0.5), datetime.timedelta(seconds = 1)) == db.PipelineHealthStatus.HEALTHY
+        await asyncio.sleep(1)
+        assert await q.get_pipeline_health_status(gb(0.5), datetime.timedelta(seconds = 1)) == db.PipelineHealthStatus.UNHEALTHY
+
+        await q.create_pipeline("pipe2", False, "password")
+        pipe2 = await q.pipeline("pipe2")
+        assert await q.get_pipeline_health_status(gb(0.5), datetime.timedelta(seconds = 1)) == db.PipelineHealthStatus.UNHEALTHY
+        await pipe2.heartbeat(gb(0.5), gb(20))
+        assert await q.get_pipeline_health_status(gb(0.5), datetime.timedelta(seconds = 1)) == db.PipelineHealthStatus.DEGRADED
+        await pipe2.heartbeat(gb(0), gb(20))
+        assert await q.get_pipeline_health_status(gb(0.5), datetime.timedelta(seconds = 1)) == db.PipelineHealthStatus.UNHEALTHY
+        await pipe2.heartbeat(gb(20), gb(20))
+        assert await q.get_pipeline_health_status(gb(0.5), datetime.timedelta(seconds = 1)) == db.PipelineHealthStatus.DEGRADED
+        assert await q.get_pipeline_health_status(gb(0), datetime.timedelta(seconds = 60)) == db.PipelineHealthStatus.HEALTHY
+
 @db._wrap_serialization_failure
 async def _commit(conn):
     await conn.commit()
@@ -853,7 +900,6 @@ async def test_serializable_wrapper(engine: sqlalchemy.ext.asyncio.AsyncEngine):
             with pytest.raises(sqlalchemy.exc.IntegrityError):
                 q1 = sqlalchemy.insert(model.options).values(key = "hi", value = "eye")
                 await _execute(conn1, q1)
-
 
 # Test result duplication checking
 # Test multiple of the same payload in create_page

@@ -19,6 +19,7 @@
 		<li>Page status: {{ macros.page_status(page.status.name, page.attempts_remaining) }}</li>
 		<li><span data-tooltip="Lower nice values are run first.">Nice</span>: {{ page.nice }} (effective {{ page.nice + page.attempts }})</li>
 		<li>Tries remaining: {{ page.attempts_remaining }} <span>({{ page.attempts }} attempts since last reset)</span></li>
+		<li>Page depth: {{ page.depth }} {% if job_depth and (page.depth > job_depth) %} (out of scope) {% else %} (in scope) {% endif %}</li>
 	</ul>
 </section>
 

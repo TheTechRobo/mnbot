@@ -43,11 +43,11 @@ def handler(msg_type: str):
 Response: typing.TypeAlias = tuple[int, typing.Optional[dict[str, typing.Any]]]
 HandlerContext = collections.namedtuple("HandlerContext", ["message", "pipeline", "version"])
 
-PIPELINE_HEALTH = {}
-
 @handler("System:ping")
 async def pong(ctx: HandlerContext, disk: dict) -> Response:
-    PIPELINE_HEALTH[ctx.pipeline.pipeline_id] = {"ping": int(time.time()), "disk": disk}
+    free_bytes = disk['free']
+    total_bytes = disk['total']
+    await ctx.pipeline.heartbeat(free_bytes, total_bytes)
     return 204, None
 
 @handler("Item:claim")
@@ -127,16 +127,14 @@ async def store(ctx: HandlerContext, *, result_id, attempt_id, type, payload):
             .join(model.pages, model.pages.c.page_id == model.attempts.c.page_id)
         )
         row = (await pipeline.conn.execute(q)).one()
-        ruleset = db.JobRuleset.from_row(row)
+        accept_col = db.JobRuleset.from_row(row).accept
         accepted_urls = set()
         for url in payload:
-            settings = db.PageSettings.from_ruleset(url, ruleset)
-            if settings.accept:
+            if accept_col.compute_for(url):
                 url = urlcanon.parse_url(url)
                 urlcanon.canon.remove_fragment(url)
                 accepted_urls.add(str(url))
-        if accepted_urls:
-            await pipeline.parent.create_pages(row.job_id, (db.PageCreation(db.generate_id(), i, row.page_id) for i in accepted_urls))
+        await pipeline.parent.create_pages(row.job_id, (db.PageCreation(db.generate_id(), i, row.page_id) for i in accepted_urls))
         aux = {"urls_added": len(accepted_urls)}
 
     return 201, {"new_id": str(result_id)} | aux
@@ -219,10 +217,11 @@ authenticator = basic_auth(
 
 async def request_hook(conn: ServerConnection, request):
     if request.path == "/health":
-        res = {"status": 200, "pipelines": PIPELINE_HEALTH}
-        r = conn.respond(200, json.dumps(res))
-        del r.headers['Content-Type']
-        r.headers['Content-Type'] = "application/json"
+        async with ENGINE.connect() as c:
+            res = {"status": 200}
+            r = conn.respond(200, json.dumps(res))
+            del r.headers['Content-Type']
+            r.headers['Content-Type'] = "application/json"
         return r
     return await authenticator(conn, request)
 

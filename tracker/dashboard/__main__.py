@@ -21,7 +21,6 @@ app = EscapingQuart(__name__)
 app.jinja_env.globals.update(isinstance = isinstance)
 
 DOCUMENTATION_URL = os.getenv("DOCUMENTATION_URL")
-TRACKER_HOST = os.getenv("TRACKER_HOST")
 
 NAV = (
     ("/", "Dashboard"),
@@ -31,9 +30,8 @@ NAV = (
 )
 
 async def _setup_engine():
-    global ENGINE, SESSION
+    global ENGINE
     ENGINE = await db.create_engine()
-    SESSION = aiohttp.ClientSession()
 
 app.before_serving(_setup_engine)
 
@@ -81,6 +79,7 @@ class PageInfoPacket:
     attempts: int
     attempts_remaining: int
     nice: int
+    depth: int
 
     all_attempts: list[AttemptInfoPacket]
 
@@ -148,7 +147,10 @@ def route_with_json(route, **kwargs):
 
 @route_with_json("/page/<page_id>")
 async def single_page(page_id, html):
-    q = sqlalchemy.select(model.pages).where(model.pages.c.page_id == page_id)
+    q = (
+            sqlalchemy.select(model.pages, db.Connection._page_depth(page_id).label("depth"), db.Connection._job_depth(model.pages.c.job_id).label("job_depth"))
+            .where(model.pages.c.page_id == page_id)
+    )
     attempt_q = (
         sqlalchemy.select(model.attempts, model.job_rulesets.c.job_ruleset_id, *model.job_ruleset_columns)
         .select_from(model.attempts)
@@ -164,7 +166,8 @@ async def single_page(page_id, html):
             if html:
                 return await render_template("error.j2", reason = f"Page ID {page_id} not found", description = f"No page with this ID exists.", show_item_search = True), 404
             return {"status": 404, "message": "Page ID not found"}, 404
-        page_packet = PageInfoPacket(page_id, row.job_id, row.payload, row.status, row.attempts, row.attempts_remaining, row.nice, [])
+        page_packet = PageInfoPacket(page_id, row.job_id, row.payload, row.status, row.attempts, row.attempts_remaining, row.nice, row.depth, [])
+        job_depth = row.job_depth
 
         attempts_res = await conn.execute(attempt_q)
         for row in attempts_res:
@@ -202,10 +205,10 @@ async def single_page(page_id, html):
                 results = results,
             ))
     if html:
-        return await render_template("page.j2", page = page_packet)
+        return await render_template("page.j2", page = page_packet, job_depth = job_depth)
     v = dataclasses.asdict(page_packet)
     v['status'] = v['status'].name
-    return {"status": 200, "page": v}
+    return {"status": 200, "page": v, "job_depth": job_depth}
 
 @route_with_json("/job/<job_id>")
 async def single_job(job_id, html):
@@ -422,19 +425,22 @@ async def screenshot(id):
 
 @route_with_json("/pipelines")
 async def pipelines(html):
-    if not TRACKER_HOST:
-        return await render_template("error.j2", reason = "Communication with tracker impossible", description = "The administrator has not set the TRACKER_HOST environment variable.")
-    async with SESSION.get(f"http://{TRACKER_HOST}/health") as resp:
-        assert resp.status == 200
-        r = await resp.json()
-    pipelines = []
-    for pipeline_id, data in r['pipelines'].items():
-        heartbeat_delta = datetime.timedelta(seconds = time.time() - data['ping'])
-        heartbeat_delta_dict = {"days": heartbeat_delta.days, "seconds": heartbeat_delta.seconds}
-        disk = (round(data['disk']['free'] / 1024 / 1024 / 1024, 1), round(data['disk']['total'] / 1024 / 1024 / 1024, 1))
-        pipelines.append((pipeline_id, heartbeat_delta_dict, disk))
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        queue = db.Connection(conn)
+        pipelines = await queue.get_pipelines()
+        res = []
+        for pipeline in pipelines:
+            if health := pipeline.pipeline_health:
+                heartbeat_delta = datetime.datetime.now(datetime.UTC) - health.last_checkin
+                heartbeat_delta_dict = {"days": heartbeat_delta.days, "seconds": heartbeat_delta.seconds}
+                heartbeat_delta_dict['healthy'] = heartbeat_delta < queue.MAX_HEARTBEAT_AGE
+                disk = (round(health.disk_free_bytes / 1024 / 1024 / 1024, 1), round(health.disk_total_bytes / 1024 / 1024 / 1024, 1), health.disk_free_bytes > queue.MIN_FREE_BYTES)
+                res.append((pipeline.pipeline_id, heartbeat_delta_dict, disk, pipeline.matchonly))
+            else:
+                res.append((pipeline.pipeline_id, None, None, pipeline.matchonly))
     if html:
-        return await render_template("pipelines.j2", pipelines = pipelines)
+        return await render_template("pipelines.j2", pipelines = res)
     return {"status": 200, "pipelines": pipelines}
 
 @app.errorhandler(werkzeug.exceptions.HTTPException)

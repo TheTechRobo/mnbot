@@ -16,6 +16,7 @@ H2IBOT_GET_URL = os.environ['H2IBOT_GET_URL']
 H2IBOT_POST_URL = os.environ['H2IBOT_POST_URL']
 TRACKER_BASE_URL = os.environ['TRACKER_BASE_URL'].rstrip("/")
 DOCUMENTATION_URL = os.environ['DOCUMENTATION_URL']
+TRACKER_HOST = os.environ['TRACKER_HOST']
 MNBOT_HEADER = "//! mnbot v1" # DO NOT ADD \n or \r\n here.
 
 def is_mnbot_js(payload):
@@ -293,6 +294,17 @@ async def generate_status_message(job: str, queue: db.Connection):
         return f"No job with ID {repr(job)} could be found."
     return f"Job {job} ({repr(ent[1])}) has status {ent[0].name} and was queued at {date.isoformat(timespec='seconds')}. See {item_url(job)} for more information. Explanation: {ent[2]}"
 
+async def health_check(queue: db.Connection):
+    status = await queue.get_pipeline_health_status()
+    match status:
+        case db.PipelineHealthStatus.HEALTHY:
+            health = "All pipelines report being healthy."
+        case db.PipelineHealthStatus.DEGRADED:
+            health = "Some pipelines report being unhealthy."
+        case db.PipelineHealthStatus.UNHEALTHY:
+            health = "All pipelines are unhealthy!"
+    return f"{health} See {TRACKER_BASE_URL}/pipelines for more information."
+
 @bot.command("!status")
 async def status(self: Bot, user: User, ran, *jobs):
     async with ENGINE.connect() as conn:
@@ -302,12 +314,18 @@ async def status(self: Bot, user: User, ran, *jobs):
             for job in jobs:
                 yield await generate_status_message(job, queue)
         else:
-            async with ENGINE.connect() as conn:
-                count = await queue.get_job_counts()
-                if not count:
-                    yield "There aren't any queued or running jobs."
-                else:
-                    yield f"There are currently {count} active jobs."
+            yield await health_check(queue)
+            count = await queue.get_job_counts()
+            if not count:
+                yield "There aren't any queued or running jobs."
+            else:
+                yield f"There are currently {count} active jobs."
+
+@bot.command("!df")
+async def df(self: Bot, user: User, ran):
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        yield await health_check(db.Connection(conn))
 
 @bot.command({"!explain", "!e"}, required_modes = "+@")
 async def explain(self: Bot, user: User, ran, id, *reason):
@@ -423,10 +441,6 @@ async def page(self: Bot, user: User, ran, page_id, action, arg = None):
             else:
                 yield f"{action} is not a valid query."
                 return
-
-@bot.command("!df")
-async def df(self: Bot, user: User, ran):
-    yield f"See {TRACKER_BASE_URL}/pipelines for pipeline information."
 
 RED = Colour.make_colour(Colour.RED)
 @bot.exception_handler
