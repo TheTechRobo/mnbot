@@ -110,6 +110,16 @@ async def translate_form_input():
     if "item" not in request.args:
         abort(400)
     id = request.args['item']
+    try:
+        id = db.parse_id(id)
+    except db.InvalidIdError:
+        url = db.Connection.canon_for_ssurt(id)
+        if url.host.startswith(b"*."):
+            # Only include the host, for a wildcard search
+            search = urlcanon.ssurt_host(url.host.removeprefix(b"*."))
+        else:
+            search = db.Connection.ssurt(id)
+        return redirect(url_for("search_url", ssurt = search))
     async with ENGINE.connect() as conn:
         conn = await conn.execution_options(postgresql_readonly = True)
         q = sqlalchemy.select(
@@ -263,7 +273,7 @@ async def single_job(job_id, html):
     v['status'] = v['status'].name
     return {"status": 200, "job": v}
 
-async def pages_list(q, html, job_id, volatile = True, use_status = False):
+async def pages_list(q, html, list_template, volatile = True, include_header = False, ugly_hack = None):
     page_size = 10
     try:
         offset = int(request.args.get("offset", 0))
@@ -279,50 +289,41 @@ async def pages_list(q, html, job_id, volatile = True, use_status = False):
         conn = await conn.execution_options(postgresql_readonly = True)
         res = await conn.stream(q)
         async for row in res:
-            if use_status:
-                page_id, payload, status, remaining = row
-                rows.append(dict(page_id = page_id, payload = payload, status = status.name, remaining = remaining))
-            else:
-                page_id, payload, attempt_count = row
-                rows.append(dict(page_id = page_id, payload = payload, attempt_count = attempt_count))
+            rows.append(row._asdict())
 
     next_offset = None
     prev_offset = max(offset - page_size, 0) if offset > 0 else None
     if len(rows) >= page_size:
         next_offset = offset + page_size
     if html:
-        return await render_template("pages.j2", rows = rows, offset = offset, next_offset = next_offset, prev_offset = prev_offset, job_id = job_id, volatile = volatile, use_status = use_status)
+        return await render_template("list/" + list_template, rows = rows, offset = offset, next_offset = next_offset, prev_offset = prev_offset, volatile = volatile, include_header = include_header, ugly_hack = ugly_hack)
     return {"status": 200, "rows": rows, "next": next_offset, "prev": prev_offset}
+
+pages_q = lambda job_id : (
+    sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, sqlalchemy.func.count(model.attempts.c.page_id).label("attempt_count"))
+    .select_from(model.pages)
+    .join(model.attempts, model.attempts.c.page_id == model.pages.c.page_id, isouter = True)
+    .where(model.pages.c.job_id == job_id)
+    .group_by(model.pages.c.page_id)
+    .order_by(*model.pages_dequeue_order)
+)
 
 @route_with_json("/job/<job_id>/pending")
 async def job_pending(job_id, html):
     q = (
-        sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, sqlalchemy.func.count(model.attempts.c.page_id))
-        .select_from(model.pages)
-        .join(model.attempts, model.attempts.c.page_id == model.pages.c.page_id, isouter = True)
-        .where(model.pages.c.job_id == job_id)
+        pages_q(job_id)
         .where(model.pages_dequeue_filter)
         .where(
             (db.Connection._page_depth(model.pages.c.page_id) <= db.Connection._job_depth(job_id))
             | (db.Connection._job_depth(job_id) == None)
         )
-        .group_by(model.pages.c.page_id)
-        .order_by(*model.pages_dequeue_order)
     )
-    return await pages_list(q, html, job_id)
+    return await pages_list(q, html, "pages_with_attempts.j2")
 
 @route_with_json("/job/<job_id>/claimed")
 async def job_claimed(job_id, html):
-    q = (
-        sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, sqlalchemy.func.count(model.attempts.c.page_id))
-        .select_from(model.pages)
-        .join(model.attempts, model.attempts.c.page_id == model.pages.c.page_id, isouter = True)
-        .where(model.pages.c.job_id == job_id)
-        .where(model.pages.c.status == model.PageStatus.CLAIMED)
-        .group_by(model.pages.c.page_id)
-        .order_by(*model.pages_dequeue_order)
-    )
-    return await pages_list(q, html, job_id)
+    q = pages_q(job_id).where(model.pages.c.status == model.PageStatus.CLAIMED)
+    return await pages_list(q, html, "pages_with_attempts.j2")
 
 @route_with_json("/job/<job_id>/pages")
 async def job_pages(job_id, html):
@@ -332,7 +333,16 @@ async def job_pages(job_id, html):
         .where(model.pages.c.job_id == job_id)
         .order_by(model.pages.c.page_id)
     )
-    return await pages_list(q, html, job_id, volatile = False, use_status = True)
+    return await pages_list(q, html, "pages_with_status.j2", volatile = False)
+
+@route_with_json("/search")
+async def search_url(html):
+    ssurt = request.args['ssurt']
+    q = (
+        sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, sqlalchemy.func.uuid_extract_timestamp(model.pages.c.page_id).label("date"))
+        .where(model.pages.c.payload_ssurt.startswith(ssurt))
+    )
+    return await pages_list(q, html, "pages_with_date.j2", volatile = False, include_header = True, ugly_hack = f"Using ssurt prefix {ssurt}")
 
 @route_with_json("/ruleset/<job_id>/<ruleset_id>/test")
 async def test_ruleset(job_id, ruleset_id, html):
@@ -344,7 +354,7 @@ async def test_ruleset(job_id, ruleset_id, html):
         latest_ruleset = await queue.get_job_ruleset(job_id)
         warning = "<p><b>Warning: You are not querying the latest ruleset.</b></p>" if str(latest_ruleset.job_ruleset_id) != ruleset_id else ""
         if url != normalized:
-            warning += "<p>When extracting outlinks, this URL will be normalized to <code>{{ normalized|e }}</code>.</p>"
+            warning += "<p>Warning: When extracting outlinks, this URL will be normalized to <code>{{ normalized|e }}</code>.</p>"
         ruleset = await queue.get_ruleset(ruleset_id)
         settings = db.PageSettings.from_ruleset(url, ruleset)
     if html:
@@ -411,8 +421,6 @@ async def get_outlinks(page_id):
                     yield json.dumps(outlink)
     yield "]"
 
-@app.route("/screenshot/<id>/full.jpg")
-@app.route("/screenshot/<id>/thumb.jpg")
 @app.route("/screenshot/<id>.jpg")
 async def screenshot(id):
     q = sqlalchemy.select(model.results.c.payload).where(model.results.c.result_id == id)

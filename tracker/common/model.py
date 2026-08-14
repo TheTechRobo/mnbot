@@ -121,11 +121,14 @@ pages = Table(
     Column("page_id", sqlalchemy.Uuid, primary_key = True),
     Column("job_id", sqlalchemy.Uuid, ForeignKey("jobs.job_id")),
     Column("payload", sqlalchemy.Text),
+    Column("payload_ssurt", sqlalchemy.Text),
     # Note! This should be reset to 0 whenever attempts_remaining is manually changed
     Column("attempts", sqlalchemy.SmallInteger, default = 0),
     Column("attempts_remaining", sqlalchemy.SmallInteger),
     Column("nice", sqlalchemy.Integer),
     Column("status", sqlalchemy.Enum(PageStatus)),
+
+    Index("pages_ssurt", "payload_ssurt"),
 )
 
 pages_index_unique = Index("pages_unique_url", pages.c.job_id, pages.c.payload, unique = True)

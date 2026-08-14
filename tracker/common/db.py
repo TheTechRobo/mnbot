@@ -15,6 +15,7 @@ import logging
 
 import uuid_utils.compat as uuid
 import uuid_utils
+import urlcanon
 import argon2
 hasher = argon2.PasswordHasher(time_cost = 2, memory_cost = 47104, parallelism = 1) # slightly higher than OWASP cheat sheet
 
@@ -362,6 +363,19 @@ class Connection:
         await self.conn.execute(sqlalchemy.insert(model.jobs), values)
         await self.conn.execute(sqlalchemy.insert(model.job_rulesets), rulesets)
 
+    @classmethod
+    def canon_for_ssurt(cls, url: str) -> urlcanon.ParsedUrl:
+        """
+        Aggressive canonicalization, from the urlcanon library.
+        I suspect this is what the WBM uses.
+        This is intended for indexing, and not for general crawling use.
+        """
+        return urlcanon.aggressive(url)
+
+    @classmethod
+    def ssurt(cls, url: str) -> str:
+        return cls.canon_for_ssurt(url).ssurt().decode(errors = "replace")
+
     @_wrap_serialization_failure
     async def create_pages(self, job_id: model.UUID, pages: typing.Iterable[PageCreation]) -> dict[model.UUID, model.UUID]:
         """
@@ -399,6 +413,7 @@ class Connection:
                     # TODO: Use the lowest one of these, if multiple are supplied to the function.
                     nice = page.nice,
                     status = page.status,
+                    ssurt = self.ssurt(page.payload),
                 ))
             payload_to_id_mapping[page.payload].append(page.page_id)
             relation_values[page.page_id] = dict(

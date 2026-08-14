@@ -1,8 +1,8 @@
 {% extends "skeleton.j2" %}
 
-{% block title %} mnbot pages iframe {% endblock %}
+{% block title %} Search results {% endblock %}
 
-{% block override_header %} {% endblock %}
+{% block override_header %} {% if include_header %} {{ super() }} {% endif %} {% endblock %}
 
 {% block content %}
 
@@ -11,6 +11,8 @@ nav {
 	vertical-align: center;
 }
 </style>
+
+{% if ugly_hack %} <p>{{ ugly_hack|e }}</p> {% endif %}
 
 <header>
 	<div>
@@ -35,17 +37,11 @@ nav {
 
 <section id="pages">
 	{% for row in rows %}
-		<a class="link-box" href="{{ url_for('single_page', page_id = row.page_id, html = True) }}" target="_top">
+		<a class="link-box" href="{% block loop_href scoped required %} {% endblock %}" target="_top">
 			<div role="button" class="outline contrast link-box-inner">
-				<b>{{ row.payload }}</b>
+				<b>{% block loop_payload scoped required %} {% endblock %}</b>
 				<br />
-				<small>
-					{% if use_status %}
-						Status: {{ macros.page_status(row.status, row.remaining) }}
-					{% else %}
-						{{ row.attempt_count }} total attempt{% if row.attempt_count != 1 %}s{% endif %}
-					{% endif %}
-				</small>
+				<small>{% block loop_footer scoped required %} {% endblock %}</small>
 			</div>
 		</a>
 	{% endfor %}
