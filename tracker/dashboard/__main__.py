@@ -4,12 +4,11 @@ import os
 import base64
 import dataclasses
 import datetime
-import time
+import urllib.parse
 import json
 import urlcanon
 
 import sqlalchemy, sqlalchemy.ext.asyncio, sqlalchemy.dialects.postgresql
-import aiohttp
 
 from ..common import db, model
 
@@ -296,7 +295,10 @@ async def pages_list(q, html, list_template, volatile = True, include_header = F
     if len(rows) >= page_size:
         next_offset = offset + page_size
     if html:
-        return await render_template("list/" + list_template, rows = rows, offset = offset, next_offset = next_offset, prev_offset = prev_offset, volatile = volatile, include_header = include_header, ugly_hack = ugly_hack)
+        new_args = {k: v for k, v in request.args.items() if k != "offset"}
+        base_query = urllib.parse.urlencode(new_args, doseq = True)
+        base_query = base_query + "&" if base_query else ""
+        return await render_template("list/" + list_template, rows = rows, offset = offset, next_offset = next_offset, prev_offset = prev_offset, volatile = volatile, include_header = include_header, ugly_hack = ugly_hack, base_query = base_query)
     return {"status": 200, "rows": rows, "next": next_offset, "prev": prev_offset}
 
 pages_q = lambda job_id : (
