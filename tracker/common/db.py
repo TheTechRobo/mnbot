@@ -252,6 +252,8 @@ class RulesetColumn[RulesetPayload]:
 @dataclasses.dataclass
 class JobRuleset:
     job_ruleset_id: model.UUID
+    all_columns = ("ua", "custom_js", "skip", "accept")
+
     ua: RulesetColumn[str]
     custom_js: RulesetColumn[str | None]
     skip: RulesetColumn[bool]
@@ -413,7 +415,7 @@ class Connection:
                     # TODO: Use the lowest one of these, if multiple are supplied to the function.
                     nice = page.nice,
                     status = page.status,
-                    ssurt = self.ssurt(page.payload),
+                    payload_ssurt = self.ssurt(page.payload),
                 ))
             payload_to_id_mapping[page.payload].append(page.page_id)
             relation_values[page.page_id] = dict(
@@ -704,6 +706,8 @@ class Connection:
 
         Returns the new ruleset ID and the new rule index.
         """
+        if rule_category not in JobRuleset.all_columns:
+            raise ValueError(f"Invalid rule category {rule_category}")
         current_ruleset = await self.get_job_ruleset(job_id, for_update = True)
         if ensure_ruleset is not None:
             if ensure_ruleset != current_ruleset.job_ruleset_id:
@@ -730,6 +734,8 @@ class Connection:
         Raises RulesetConflict if the ensure_ruleset check fails.
         Returns the new ruleset ID and the old rule value.
         """
+        if rule_category not in JobRuleset.all_columns:
+            raise ValueError(f"Invalid rule category {rule_category}")
         current_ruleset = await self.get_job_ruleset(job_id, for_update = True)
         if ensure_ruleset is not None:
             if ensure_ruleset != current_ruleset.job_ruleset_id:
@@ -750,7 +756,7 @@ class Connection:
     @_wrap_serialization_failure
     async def remove_job_rules_by_scope(self, job_id: model.UUID, rule_category: str, scope: str, ensure_ruleset: model.UUID | None = None) -> tuple[model.UUID, int]:
         """
-        Remove all job rules with the given scope.
+        Remove all job rules with the given scope. The special category 'all' applies to all categories.
         Returns the new ruleset ID and the number of rules removed.
         (If no values are removed, it will return the existing ruleset ID instead.)
 
@@ -761,17 +767,24 @@ class Connection:
         if ensure_ruleset is not None:
             if ensure_ruleset != current_ruleset.job_ruleset_id:
                 raise RulesetConflict(current_ruleset.job_ruleset_id)
-        new_rules = []
-        old_col: RulesetColumn = getattr(current_ruleset, rule_category)
-        for rule in old_col.rules:
-            if rule.scope == scope:
-                values_removed += 1
-                continue
-            new_rules.append(rule)
+        if rule_category == "all":
+            categories = JobRuleset.all_columns
+        elif rule_category in JobRuleset.all_columns:
+            categories = (rule_category,)
+        else:
+            raise ValueError(f"Invalid rule category {rule_category}")
+        for category in categories:
+            new_rules = []
+            old_col: RulesetColumn = getattr(current_ruleset, category)
+            for rule in old_col.rules:
+                if rule.scope == scope:
+                    values_removed += 1
+                    continue
+                new_rules.append(rule)
+            old_col.rules = new_rules
         if not values_removed:
             return current_ruleset.job_ruleset_id, 0
         current_ruleset.job_ruleset_id = generate_id()
-        old_col.rules = new_rules
         await self.new_ruleset(job_id, current_ruleset)
         return current_ruleset.job_ruleset_id, values_removed
 

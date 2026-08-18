@@ -36,11 +36,6 @@
 				</b>
 			</p>
 			<ul>
-				<li class="res-settings">
-					<b>Applied settings: </b>
-					{{ macros.build_settings(attempt.applied_settings, false) }}
-					(Ruleset: {{ attempt.ruleset.job_ruleset_id }})
-				</li>
 				{% if attempt.error %}
 					<li>
 						<details>
@@ -52,6 +47,11 @@
 						</details>
 					</li>
 				{% endif %}
+				<li class="res-settings">
+					<b>Applied settings: </b>
+					{{ macros.build_settings(attempt.applied_settings, false) }}
+					(Ruleset: {{ attempt.ruleset.job_ruleset_id }})
+				</li>
 				<li>
 					<b>Status code: </b>{{ attempt.results.status_code }}
 				</li>
@@ -96,7 +96,7 @@
 					{% if attempt.results.outlinks %}
 						<details>
 							<summary>
-								<b>Discovered outlinks: </b>
+								<b>Discovered outlinks</b> (before filtering):
 							</summary>
 							<ul>
 								{% for outlink in attempt.results.outlinks %}
@@ -109,15 +109,13 @@
 							</ul>
 						</details>
 					{% else %}
-						<b>Discovered outlinks: </b>
-						<br />
 						<em>No outlinks were recorded.</em>
 					{% endif %}
 				</li>
 				<li class="res-requisites">
 					{% if not attempt.results.requisites is none %}
 						<details>
-							<summary><b>Requisites:</b></summary>
+							<summary><b>Requisites</b> (click to show):</summary>
 							<div class="overflow-auto">
 								<table class="striped">
 									<tr>
@@ -181,14 +179,6 @@
 		<p>This item has not been tried yet.</p>
 	{% endif %}
 </section>
-
-{#
-<section id="upload" aria-keyshortcuts="u" tabindex="-1">
-	<h3><span class="shortcut">U</span>ploads</h3>
-	<!-- <p>Item {{ item.id }} has not yet been uploaded to IA. Uploading may take up to a day. If it is still not uploaded after that, please contact an admin.</p> -->
-	<p>Upload indexing is currently not implemented.</p>
-</section>
-#}
 
 <script>
 SHORTCUTS.d = "pagemeta";

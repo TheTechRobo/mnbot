@@ -16,7 +16,6 @@ H2IBOT_GET_URL = os.environ['H2IBOT_GET_URL']
 H2IBOT_POST_URL = os.environ['H2IBOT_POST_URL']
 TRACKER_BASE_URL = os.environ['TRACKER_BASE_URL'].rstrip("/")
 DOCUMENTATION_URL = os.environ['DOCUMENTATION_URL']
-TRACKER_HOST = os.environ['TRACKER_HOST']
 MNBOT_HEADER = "//! mnbot v1" # DO NOT ADD \n or \r\n here.
 
 def is_mnbot_js(payload):
@@ -78,6 +77,18 @@ async def fetch_custom_js(url):
         traceback.print_exc()
         raise CustomMessageException(f"Failed to retrieve custom JS ({type(e)} was raised).")
 
+def validate_depth(depth):
+    try:
+        if depth in ("inf", "infinity"):
+            return None
+        else:
+            depth = int(depth)
+            if depth < 0:
+                raise ValueError
+            return depth
+    except (ValueError, AssertionError):
+        raise CustomMessageException("Invalid depth value! Please supply either an integer >= 0 or 'inf' for no limit.")
+
 @bot.add_argument("--accept", default = None)
 @bot.add_argument("--depth", default = "0")
 @bot.add_argument("--concurrency", "-c", type = int, default = 1)
@@ -95,15 +106,7 @@ async def fetch_custom_js(url):
 @bot.argparse("!brozzle")
 @bot.command({"!b", "!brozzle"}, required_modes="+@")
 async def brozzle(self: Bot, user: User, ran, args):
-    try:
-        if args.depth in ("inf", "infinity"):
-            depth = None
-        else:
-            depth = int(args.depth)
-            assert depth >= 0
-    except (ValueError, AssertionError):
-        raise CustomMessageException("Invalid depth value! Please supply either an integer >= 0 or 'inf' for no limit.")
-
+    depth = validate_depth(args.depth)
     metadata = {}
     if args.nice < -10:
         if "@" not in user.modes:
@@ -211,7 +214,7 @@ async def brozzle(self: Bot, user: User, ran, args):
 @bot.add_argument("setting", choices = ("ua", "user_agent", "custom_js", "skip", "no_skip", "accept", "reject"))
 @bot.add_argument("job_id")
 @bot.argparse("!addrule")
-@bot.command({"!addrule"}, required_modes = "+@")
+@bot.command(("!addrule", "!ar"), required_modes = "+@")
 async def addrule(self: Bot, user: User, ran, args):
     if args.setting in ("skip", "no_skip", "accept", "reject") and args.arg:
         yield f"The '{args.setting}' setting does not accept arguments."
@@ -246,17 +249,38 @@ async def addrule(self: Bot, user: User, ran, args):
         nid, nidx = await queue.create_job_rule(args.job_id, key, args.add_before, db.JobRule(args.pattern, payload), args.ensure_ruleset)
     yield f"Created new {key} rule at index {nidx} (new ruleset ID: {nid})."
 
+@bot.command(("!ignore", "!ig"), required_modes = "+@")
+async def ignore(self: Bot, user: User, ran, job_id, pattern):
+    db.regex.compile(pattern)
+    job_id = db.parse_id(job_id)
+    async with ENGINE.begin() as conn:
+        queue = db.Connection(conn)
+        _id, accept_idx = await queue.create_job_rule(job_id, "accept", None, db.JobRule(pattern, False))
+        id, skip_idx = await queue.create_job_rule(job_id, "skip", None, db.JobRule(pattern, True))
+        yield f"Created new ruleset {id} (accept index: {accept_idx}, skip index: {skip_idx})"
+
 @bot.add_argument("--index", action = "store_true")
 @bot.add_argument("--ensure-ruleset", default = None)
 @bot.add_argument("pattern_or_index")
-@bot.add_argument("setting", choices = ("ua", "user_agent", "custom_js", "skip", "accept"))
+@bot.add_argument("setting", nargs = "?", default = "all")
 @bot.add_argument("job_id")
 @bot.argparse("!delrule")
-@bot.command("!delrule", required_modes = "+@")
+@bot.command(("!delrule", "!dr"), required_modes = "+@")
 async def delrule(self: Bot, user: User, ran, args):
     key = args.setting
+    if key in ("reject", "no_skip"):
+        yield f"Please use 'accept' or 'skip' when removing rules rather than 'reject' or 'no_skip'."
+        return
     if key == "user_agent":
         key = "ua"
+    if key not in db.JobRuleset.all_columns:
+        if key == "all":
+            if args.index:
+                yield f"Sorry, but you have to specify a setting when removing a rule by its index."
+                return
+        else:
+            yield f"Sorry, but '{key}' is not a valid rule type (choose from {db.JobRuleset.all_columns})."
+            return
     async with ENGINE.begin() as conn:
         queue = db.Connection(conn)
         if args.index:
@@ -267,7 +291,7 @@ async def delrule(self: Bot, user: User, ran, args):
             if num_removed == 0:
                 raise CustomMessageException("No rule with that pattern was found.")
             s = "" if num_removed == 1 else "s"
-            message = f"Removed {num_removed} {key} rule{s} (new ruleset ID: {ruleset_id})."
+            message = f"Removed {num_removed} rule{s} (new ruleset ID: {ruleset_id})."
     yield message
 
 @bot.command({"!concurrency", "!con"}, required_modes = "+@")
@@ -338,6 +362,28 @@ async def explain(self: Bot, user: User, ran, id, *reason):
             yield f"Reason for {id} set to {r!r}."
         else:
             yield "No item was found."
+
+@bot.command("!depth", required_modes = "+@")
+async def depth(self: Bot, user: User, ran, id, job_id, newval):
+    depth = validate_depth(newval)
+    job_id = db.parse_id(job_id)
+    async with ENGINE.begin() as conn:
+        queue = db.Connection(conn)
+        r = await conn.execute(sqlalchemy.update(model.jobs).where(model.jobs.c.job_id == job_id).values(depth = depth))
+        assert r.rowcount == 1
+        new_status = await queue.update_job_status(job_id, allow_resumption = False)
+        if new_status == model.JobStatus.ABORTED:
+            yield f"Successfully updated job depth. The job was aborted and won't be resumed automatically."
+        else:
+            yield f"Successfully updated job depth. Recalculated status: {new_status.name}"
+
+@bot.command("!abort", required_modes = "+@")
+async def abort(self: Bot, user: User, ran, id, job_id):
+    job_id = db.parse_id(job_id)
+    async with ENGINE.begin() as conn:
+        queue = db.Connection(conn)
+        await queue.abort_job(job_id)
+        yield f"Job {job_id} has been aborted."
 
 @bot.command("!tag")
 async def tag(self: Bot, user: User, ran, command: str, pipeline_id: str, tag = None):
@@ -464,6 +510,7 @@ async def main():
     global ENGINE, AIOHTTP_SESSION
     ENGINE = await db.create_engine()
     AIOHTTP_SESSION = aiohttp.ClientSession()
+    print("Connected to database, starting IRC bot...", flush = True)
     await bot.run_forever()
 
 if __name__ == "__main__":

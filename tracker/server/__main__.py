@@ -21,6 +21,7 @@ logging.basicConfig(level = logging.INFO, format = "%(asctime)s - %(name)s - %(l
 
 INFO_URL = os.environ['INFO_URL']
 TRACKER_BASE_URL = os.environ['TRACKER_BASE_URL'].rstrip("/")
+LISTEN_HOST = os.environ['LISTEN_HOST']
 
 def item_url(id: model.UUID):
     return f"{TRACKER_BASE_URL}/job/{id}"
@@ -230,7 +231,7 @@ async def main():
     ENGINE = await db.create_engine()
     async with serve(
         handle_connection,
-        "0.0.0.0", 8897,
+        LISTEN_HOST, 8897,
         process_request = request_hook,
         max_size=2**25
     ) as server:

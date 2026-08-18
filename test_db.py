@@ -749,6 +749,35 @@ async def test_job_rule_removal_by_scope(engine: sqlalchemy.ext.asyncio.AsyncEng
         assert ruleset7.skip.rules == [db.JobRule("foo", False)]
 
 @_test
+async def test_job_rule_removal_by_scope_all(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job1 = await make_job(q)
+
+        rs1, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("foo", ""))
+        assert idx == 0
+        rs2, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("bar", ""), ensure_ruleset = rs1)
+        assert idx == 1
+        rs3, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("foo", ""))
+        assert idx == 2
+        rs4, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("foo", ""))
+        assert idx == 3
+        rs5, idx = await q.create_job_rule(job1, "skip", None, db.JobRule("foo", False))
+        assert idx == 0
+
+        ruleset5 = await q.get_job_ruleset(job1)
+        assert rs5 == ruleset5.job_ruleset_id
+        assert ruleset5.ua.rules == [db.JobRule("foo", ""), db.JobRule("bar", ""), db.JobRule("foo", ""), db.JobRule("foo", "")]
+        assert ruleset5.skip.rules == [db.JobRule("foo", False)]
+
+        rs6, num_removed = await q.remove_job_rules_by_scope(job1, "all", "foo", rs5)
+        assert num_removed == 4
+        ruleset6 = await q.get_job_ruleset(job1)
+        assert ruleset6.job_ruleset_id == rs6
+        assert ruleset6.ua.rules == [db.JobRule("bar", "")]
+        assert ruleset6.skip.rules == []
+
+@_test
 async def test_job_rule_edge_cases(engine: sqlalchemy.ext.asyncio.AsyncEngine):
     """
     Tests some possible edge cases related to job rulesets.
@@ -789,11 +818,11 @@ async def test_job_rule_edge_cases(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         assert ruleset3.job_ruleset_id == ruleset4.job_ruleset_id
         assert ruleset3 == ruleset4
 
-        with pytest.raises(AttributeError):
+        with pytest.raises(ValueError):
             await q.create_job_rule(job1, "nonexistent", None, db.JobRule("", ""))
-        with pytest.raises(AttributeError):
+        with pytest.raises(ValueError):
             await q.remove_job_rule(job1, "nonexistent", 0)
-        with pytest.raises(AttributeError):
+        with pytest.raises(ValueError):
             await q.remove_job_rules_by_scope(job1, "nonexistent", "")
 
 @_test
@@ -871,6 +900,31 @@ async def test_pipeline_heartbeat(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         assert await q.get_pipeline_health_status(gb(0.5), datetime.timedelta(seconds = 1)) == db.PipelineHealthStatus.DEGRADED
         assert await q.get_pipeline_health_status(gb(0), datetime.timedelta(seconds = 60)) == db.PipelineHealthStatus.HEALTHY
 
+@_test
+async def test_multiple_create_page_same_payload(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job_id = await make_job(q)
+        pages = [db.PageCreation(db.generate_id(), i, None) for i in ("d", "a", "b", "a", "c")]
+        await q.create_pages(job_id, pages)
+        all_pages = [page.payload async for page in q.all_pending_pages(job_id)]
+        assert all_pages == ["d", "a", "b", "c"]
+
+@_test
+async def test_result_dupe_ignore(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job_id = await make_job(q, concurrency = 1)
+        page_id, = await make_pages(q, job_id, "a")
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+        claim = await pipe.find_claim_page("", 0)
+        assert claim and claim.page_id == page_id
+        result_id = db.generate_id()
+        await pipe.create_result(claim.attempt_id, result_id, model.ResultType.CUSTOM_JS, {})
+        # Second time should also succeed (failing silently as the result already exists)
+        await pipe.create_result(claim.attempt_id, result_id, model.ResultType.CUSTOM_JS, {})
+
 @db._wrap_serialization_failure
 async def _commit(conn):
     await conn.commit()
@@ -901,7 +955,5 @@ async def test_serializable_wrapper(engine: sqlalchemy.ext.asyncio.AsyncEngine):
                 q1 = sqlalchemy.insert(model.options).values(key = "hi", value = "eye")
                 await _execute(conn1, q1)
 
-# Test result duplication checking
-# Test multiple of the same payload in create_page
-    # And the niceness update.
-# Test nonexistence errors.
+# create_page: Test the niceness update. (Not currently used, so I'm not that worried right now.)
+# TODO: Test more nonexistence errors.
