@@ -156,7 +156,7 @@ class Counts:
 @dataclasses.dataclass
 class PipelineSlotInfo:
     matchonly: bool
-    current_claim: tuple[model.UUID | None, model.ClaimLock | None]
+    current_claim: model.UUID | None
 
 @dataclasses.dataclass
 class PendingPage:
@@ -392,7 +392,6 @@ class Connection:
                 pipeline_id = pipeline,
                 slot = slot,
                 job_id = None,
-                lock = None,
             ))
         await self.conn.execute(q, values)
 
@@ -436,6 +435,7 @@ class Connection:
         """
         Sets a page's max tries to max_tries, and resets the attempt counter to zero.
         (Existing attempt rows are not changed, only the attempts column.)
+        This also automatically calls update_job_status.
         """
         q = (
             sqlalchemy.update(model.pages)
@@ -445,6 +445,8 @@ class Connection:
         res = await self.conn.execute(q)
         if res.rowcount == 0:
             raise NoSuchThingError
+        job_id = (await self.conn.scalars(sqlalchemy.select(model.pages.c.job_id).where(model.pages.c.page_id == page_id))).one()
+        await self.update_job_status(job_id)
 
     @_wrap_serialization_failure
     async def update_job_status(self, job_id: model.UUID, allow_resumption: bool = False) -> model.JobStatus:
@@ -497,18 +499,6 @@ class Connection:
             raise NoSuchThingError
 
         new_status = row[0]
-        if new_status in (model.JobStatus.DONE, model.JobStatus.ABORTED):
-            # Disclaim this job from all pipelines
-            q = (
-                sqlalchemy.update(model.claims)
-                .where(model.claims.c.job_id == job_id)
-                .where(
-                    (model.claims.c.lock == None) | (model.claims.c.lock == model.ClaimLock.UNTIL_FINISHED)
-                )
-                .values(job_id = None, lock = None)
-            )
-            await self.conn.execute(q)
-
         return new_status
 
     @_wrap_serialization_failure
@@ -736,7 +726,7 @@ class Pipeline:
         Gets pipeline information and the current claim for a pipeline.
         """
         q = (
-            sqlalchemy.select(model.pipelines.c.matchonly, model.claims.c.job_id, model.claims.c.lock)
+            sqlalchemy.select(model.pipelines.c.matchonly, model.claims.c.job_id)
             .join(model.claims, (model.pipelines.c.pipeline_id == model.claims.c.pipeline_id) & (model.claims.c.slot == slot), isouter = False)
             .where(model.pipelines.c.pipeline_id == self.pipeline_id)
         )
@@ -746,8 +736,8 @@ class Pipeline:
         data = result.first()
         if not data:
             raise NoSuchPipelineError("Pipeline slot should be registered before use")
-        matchonly, job_id, lock = data
-        return PipelineSlotInfo(matchonly = matchonly, current_claim = (job_id, lock))
+        matchonly, job_id = data
+        return PipelineSlotInfo(matchonly = matchonly, current_claim = job_id)
 
     async def _find_claimable_job(self, matchonly: bool, include_existing: model.UUID | None) -> model.UUID | None:
         """
@@ -771,23 +761,21 @@ class Pipeline:
     async def _set_claim(self, slot: int, job: model.UUID | None):
         """
         Sets the current claim for a job, and updates the claim count of the old and new jobs.
-        Removes any claim lock if present.
         """
+        # Update claim entry
         q = (
             sqlalchemy.update(model.claims)
             .where(model.claims.c.pipeline_id == self.pipeline_id)
             .where(model.claims.c.slot == slot)
-            .values(job_id = job, lock = None)
+            .values(job_id = job)
             .returning(sqlalchemy.text("old.job_id"))
         )
         res = (await self.conn.execute(q)).first()
         if not res:
             raise NoSuchPipelineError()
         old_job = res[0]
-        if old_job == job:
-            # no need to change active claims, nothing has changed
-            return
-        # TODO: Combine these into one query
+
+        # Update active_claims values
         if old_job:
             q = (
                 sqlalchemy.update(model.jobs)
@@ -804,7 +792,7 @@ class Pipeline:
             await self.conn.execute(q)
 
     @_wrap_serialization_failure
-    async def _create_attempt(self, page: model.UUID, pipeline_version: str, ruleset_id: model.UUID) -> model.UUID:
+    async def _create_attempt(self, page: model.UUID, pipeline_version: str, pipeline_slot: int, ruleset_id: model.UUID) -> model.UUID:
         """
         Creates an attempt for a page, returning its ID.
         """
@@ -815,6 +803,7 @@ class Pipeline:
             page_id = page,
             pipeline_id = self.pipeline_id,
             pipeline_version = pipeline_version,
+            pipeline_slot = pipeline_slot,
             ruleset_id = ruleset_id,
         )
         await self.conn.execute(q, (val,))
@@ -846,7 +835,7 @@ class Pipeline:
             await self.conn.execute(update_query)
 
     @_wrap_serialization_failure
-    async def _claim_page(self, job_id: model.UUID, pipeline_version: str) -> PageClaimInfo | None:
+    async def _claim_page(self, job_id: model.UUID, pipeline_version: str, pipeline_slot: int) -> PageClaimInfo | None:
         """
         Claims a page from a particular job.
         """
@@ -863,7 +852,7 @@ class Pipeline:
             )
         )
         await self.conn.execute(q)
-        attempt = await self._create_attempt(info.page_id, pipeline_version, info.ruleset_id)
+        attempt = await self._create_attempt(info.page_id, pipeline_version, pipeline_slot, info.ruleset_id)
         return PageClaimInfo(
             page_id = info.page_id,
             attempt_id = attempt,
@@ -887,16 +876,14 @@ class Pipeline:
         """
         pipeline_info = await self.info(slot)
         assert pipeline_info is not None, "Pipeline disappeared"
-        current_claim, current_lock = pipeline_info.current_claim
-        if current_lock is None:
-            # No lock exists, try to find a better job
-            new_job = await self._find_claimable_job(pipeline_info.matchonly, current_claim)
-            if new_job and new_job != pipeline_info.current_claim[0]:
-                # Found a better option, let's claim that
-                await self._set_claim(slot, new_job)
-                current_claim = new_job
+        current_claim = pipeline_info.current_claim
+        new_job = await self._find_claimable_job(pipeline_info.matchonly, current_claim)
+        if new_job != pipeline_info.current_claim:
+            # Either we found a better option, or the job is no longer valid
+            await self._set_claim(slot, new_job)
+            current_claim = new_job
         if current_claim:
-            return await self._claim_page(current_claim, pipeline_version)
+            return await self._claim_page(current_claim, pipeline_version, slot)
 
     @_wrap_serialization_failure
     async def create_tags(self, *tags):
@@ -948,21 +935,21 @@ class Pipeline:
             raise AuthenticationFailure
 
     @_wrap_serialization_failure
-    async def _complete_attempt(self, attempt_id: model.UUID, error: str | None) -> model.UUID:
+    async def _complete_attempt(self, attempt_id: model.UUID, error: str | None) -> tuple[model.UUID, int]:
         """
-        Marks an attempt as complete, returning the page ID.
+        Marks an attempt as complete, returning the page ID and the slot.
         """
         q = (
             sqlalchemy.update(model.attempts)
             .where(model.attempts.c.attempt_id == attempt_id)
             .values(finished = True, error = error)
-            .returning(model.attempts.c.page_id)
+            .returning(model.attempts.c.page_id, model.attempts.c.pipeline_slot)
         )
         res = await self.conn.execute(q)
         row = res.first()
         if not row:
             raise NoSuchThingError
-        return row[0]
+        return row.page_id, row.pipeline_slot
 
     async def _set_page_status_q(self, page_id: model.UUID, allow_retry: bool) -> int:
         """
@@ -987,26 +974,44 @@ class Pipeline:
             .returning(model.pages.c.attempts_remaining)
         )
         res = await self.conn.execute(q)
-        row = res.first()
-        assert row
+        row = res.one()
         return row[0]
 
     @_wrap_serialization_failure
-    async def finish_attempt(self, attempt_id: model.UUID):
-        """
-        Marks an attempt as completed successfully.
-        """
-        page_id = await self._complete_attempt(attempt_id, None)
-        await self._set_page_status_q(page_id, False)
+    async def _get_job_id(self, page_id: model.UUID) -> model.UUID:
+        q = sqlalchemy.select(model.pages.c.job_id).where(model.pages.c.page_id == page_id)
+        return (await self.conn.scalars(q)).one()
 
     @_wrap_serialization_failure
-    async def fail_attempt(self, attempt_id: model.UUID, error: str, fatal: bool) -> int:
+    async def finish_attempt(self, attempt_id: model.UUID) -> model.JobStatus:
         """
-        Fails an attempt.
-        Returns the new value of attempts_remaining.
+        Marks an attempt as completed successfully, and then updates the job status (possibly disclaiming the job).
+        Returns the new job status.
         """
-        page_id = await self._complete_attempt(attempt_id, error)
-        return await self._set_page_status_q(page_id, not fatal)
+        page_id, slot = await self._complete_attempt(attempt_id, None)
+        await self._set_page_status_q(page_id, False)
+
+        job_id = await self._get_job_id(page_id)
+        new_status = await self.parent.update_job_status(job_id)
+        if new_status in (model.JobStatus.ABORTED, model.JobStatus.DONE):
+            # Disclaim this job
+            await self._set_claim(slot, None)
+        return new_status
+
+    @_wrap_serialization_failure
+    async def fail_attempt(self, attempt_id: model.UUID, error: str, fatal: bool) -> tuple[int, model.JobStatus]:
+        """
+        Fails an attempt, and then updates the job status (possibly disclaiming the job).
+        Returns a tuple of the new value of attempts_remaining and the new job status.
+        """
+        page_id, slot = await self._complete_attempt(attempt_id, error)
+        attempts_remaining = await self._set_page_status_q(page_id, not fatal)
+
+        job_id = await self._get_job_id(page_id)
+        new_status = await self.parent.update_job_status(job_id)
+        if new_status in (model.JobStatus.ABORTED, model.JobStatus.DONE):
+            await self._set_claim(slot, None)
+        return attempts_remaining, new_status
 
     @_wrap_serialization_failure
     async def create_result(self, attempt_id: model.UUID, result_id: model.UUID, result_type: model.ResultType, payload: typing.Any):

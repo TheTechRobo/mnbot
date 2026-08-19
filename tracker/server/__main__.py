@@ -94,17 +94,14 @@ async def fail(ctx: HandlerContext, *, attempt_id, message, fatal) -> Response:
     # Must commit before sending any notification message, otherwise
     # serialization failures may cause excess or incorrect notifications.
     async with pipeline.parent.conn.begin():
-        tries_remaining = await pipeline.fail_attempt(attempt_id, message, fatal)
-
-        if tries_remaining <= 0:
+        tries_remaining, new_status = await pipeline.fail_attempt(attempt_id, message, fatal)
+        if new_status.is_done():
             job_id, (initial_item, author) = await pipeline.parent.attempt_id_to_job_id(attempt_id, [model.jobs.c.initial_page, model.jobs.c.created_by])
-            new_status = await pipeline.parent.update_job_status(job_id)
-            if new_status == model.JobStatus.DONE:
-                if await pipeline.parent.is_single_job(job_id):
-                    summary = message.split("\n", 1)[0].strip()
-                    notify_message = notify_user(job_id, initial_item, author, f"has {RED}failed{RESET} (last error: {MONO}{summary}{RESET}).")
-                else:
-                    notify_message = notify_user(job_id, initial_item, author, "has finished.")
+            if await pipeline.parent.is_single_job(job_id):
+                summary = message.split("\n", 1)[0].strip()
+                notify_message = notify_user(job_id, initial_item, author, f"has {RED}failed{RESET} (last error: {MONO}{summary}{RESET}).")
+            else:
+                notify_message = notify_user(job_id, initial_item, author, "has finished.")
 
     if notify_message:
         await bot.send_message(notify_message)
@@ -147,10 +144,9 @@ async def finish(ctx: HandlerContext, *, attempt_id) -> Response:
     notify_message = None
 
     async with pipeline.parent.conn.begin():
-        await pipeline.finish_attempt(attempt_id)
         job_id, (initial_item, author) = await pipeline.parent.attempt_id_to_job_id(attempt_id, [model.jobs.c.initial_page, model.jobs.c.created_by])
-        new_status = await pipeline.parent.update_job_status(job_id)
-        if new_status == model.JobStatus.DONE:
+        new_status = await pipeline.finish_attempt(attempt_id)
+        if new_status.is_done():
             notify_message = notify_user(job_id, initial_item, author, "has finished.")
 
     if notify_message:

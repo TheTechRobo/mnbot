@@ -330,7 +330,7 @@ async def job_claimed(job_id, html):
 @route_with_json("/job/<job_id>/pages")
 async def job_pages(job_id, html):
     q = (
-        sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, model.pages.c.status, model.pages.c.attempts_remaining)
+        sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, model.pages.c.status, model.pages.c.attempts_remaining, (db.Connection._page_depth(model.pages.c.page_id) > db.Connection._job_depth(job_id)).label("out_of_scope"))
         .select_from(model.pages)
         .where(model.pages.c.job_id == job_id)
         .order_by(model.pages.c.page_id)

@@ -318,31 +318,29 @@ async def test_retries(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         assert claim1 and claim1.payload == "one"
         claim2 = await pipe.find_claim_page("", 1)
         assert claim2 and claim2.payload == "two"
-        await pipe.finish_attempt(claim1.attempt_id)
+        assert (await pipe.finish_attempt(claim1.attempt_id)) == model.JobStatus.ACTIVE
         # Claim a third page, fail it non-fatally. It should be returned to the queue
         claim3 = await pipe.find_claim_page("", 0)
         assert claim3 and claim3.payload == "three"
         # When it is returned to the queue it should have one try remaining
-        assert (await pipe.fail_attempt(claim3.attempt_id, "error", False)) == 1
+        assert (await pipe.fail_attempt(claim3.attempt_id, "error", False)) == (1, model.JobStatus.ACTIVE)
         # Claim a fourth page, failing it fatally
         claim4 = await pipe.find_claim_page("", 0)
         assert claim4 and claim4.payload == "four"
         # Should thus have no tries remaining
-        assert (await pipe.fail_attempt(claim4.attempt_id, "error", True)) == 0
+        assert (await pipe.fail_attempt(claim4.attempt_id, "error", True)) == (0, model.JobStatus.ACTIVE)
         # Ensure claim 3 was recycled back into the queue, and that max tries is taken into account.
         claim3_2 = await pipe.find_claim_page("", 0)
         assert claim3_2 and claim3_2.payload == "three"
-        assert (await pipe.fail_attempt(claim3_2.attempt_id, "error", False)) == 0
-        with pytest.raises(db.JobExhausted):
-            await pipe.find_claim_page("", 0)
-            # Ordinarily we would now recalculate the job status, but not in this test
+        # DRAINING because claim2 is still claimed
+        assert (await pipe.fail_attempt(claim3_2.attempt_id, "error", False)) == (0, model.JobStatus.DRAINING)
+        assert (await pipe.finish_attempt(claim2.attempt_id)) == model.JobStatus.DONE
         # Ensure that adding retries manually works as intended
         await q.retry_page(claim3_2.page_id, 1)
         claim3_4 = await pipe.find_claim_page("", 0)
         assert claim3_4 and claim3_4.payload == "three"
-        assert (await pipe.fail_attempt(claim3_4.attempt_id, "error", False)) == 0
-        with pytest.raises(db.JobExhausted):
-            await pipe.find_claim_page("", 0)
+        assert (await pipe.fail_attempt(claim3_4.attempt_id, "error", False)) == (0, model.JobStatus.DONE)
+        assert (await pipe.find_claim_page("", 0)) is None
 
 async def check_job_status(queue: db.Connection, job_id, expected_status):
     q = sqlalchemy.select(model.jobs.c.status).where(model.jobs.c.job_id == job_id)
@@ -371,14 +369,13 @@ async def test_finishing(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         # Start claiming from job 1
         claim1_1 = await pipe.find_claim_page("", 0)
         assert claim1_1 and claim1_1.payload == "1one"
-        await pipe.finish_attempt(claim1_1.attempt_id)
-        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.ACTIVE
+        assert (await pipe.finish_attempt(claim1_1.attempt_id)) == model.JobStatus.ACTIVE
         await check_job_status(queue, job1, model.JobStatus.ACTIVE)
+        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.ACTIVE
         # Fail page non-fatally
         claim1_2 = await pipe.find_claim_page("", 0)
         assert claim1_2 and claim1_2.payload == "1two"
-        await pipe.fail_attempt(claim1_2.attempt_id, "", False)
-        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.ACTIVE
+        assert (await pipe.fail_attempt(claim1_2.attempt_id, "", False)) == (1, model.JobStatus.ACTIVE)
         await check_job_status(queue, job1, model.JobStatus.ACTIVE)
         # Claim third page but don't fail it yet
         claim1_3 = await pipe.find_claim_page("", 0)
@@ -390,19 +387,16 @@ async def test_finishing(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         assert claim1_2_2 and claim1_2_2.payload == "1two"
         assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.DRAINING
         # Same goes for if we finish one of them (but not both)
-        await pipe.fail_attempt(claim1_2_2.attempt_id, "", False)
-        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.DRAINING
+        assert (await pipe.fail_attempt(claim1_2_2.attempt_id, "", False)) == (0, model.JobStatus.DRAINING)
         await check_job_status(queue, job1, model.JobStatus.DRAINING)
         # And if we finish the other, we're done :-)
-        await pipe.finish_attempt(claim1_3.attempt_id)
-        assert (await pipe.parent.update_job_status(job1)) == model.JobStatus.DONE
+        assert (await pipe.finish_attempt(claim1_3.attempt_id)) == model.JobStatus.DONE
         await check_job_status(queue, job1, model.JobStatus.DONE)
 
         await check_job_status(queue, job2, model.JobStatus.ACTIVE)
         claim2_1 = await pipe.find_claim_page("", 0)
         assert claim2_1 and claim2_1.payload == "2one"
-        await pipe.fail_attempt(claim2_1.attempt_id, "", True)
-        assert (await pipe.parent.update_job_status(job2)) == model.JobStatus.DONE
+        assert (await pipe.fail_attempt(claim2_1.attempt_id, "", True)) == (0, model.JobStatus.DONE)
         await check_job_status(queue, job2, model.JobStatus.DONE)
 
         # Finally, adding more pages should make it ACTIVE again.
@@ -429,7 +423,7 @@ async def test_update_job_status_with_abort(engine: sqlalchemy.ext.asyncio.Async
         assert (await q.update_job_status(job1) == model.JobStatus.ABORTED)
         assert (await q.update_job_status(job1, True) == model.JobStatus.DRAINING)
         await q.abort_job(job1)
-        await pipe.finish_attempt(res.attempt_id)
+        assert (await pipe.finish_attempt(res.attempt_id)) == model.JobStatus.ABORTED
         assert (await q.update_job_status(job1) == model.JobStatus.ABORTED)
         assert (await q.update_job_status(job1, True) == model.JobStatus.DONE)
 
@@ -447,8 +441,9 @@ async def test_update_job_status_with_depth(engine: sqlalchemy.ext.asyncio.Async
         claim = (await pipe.find_claim_page("", 0))
         assert claim and claim.page_id == a
         assert (await q.update_job_status(job1)) == model.JobStatus.DRAINING
-        await pipe.finish_attempt(claim.attempt_id)
+        assert (await pipe.finish_attempt(claim.attempt_id)) == model.JobStatus.DONE
         # At this point, there is still an item, but it is out of scope and so the job is done.
+        assert (await conn.scalar(sqlalchemy.select(model.jobs.c.status).where(model.jobs.c.job_id == job1))) == model.JobStatus.DONE
         assert (await q.update_job_status(job1)) == model.JobStatus.DONE
 
 @_test
@@ -894,6 +889,21 @@ async def test_result_dupe_ignore(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         await pipe.create_result(claim.attempt_id, result_id, model.ResultType.CUSTOM_JS, {})
         # Second time should also succeed (failing silently as the result already exists)
         await pipe.create_result(claim.attempt_id, result_id, model.ResultType.CUSTOM_JS, {})
+
+@_test
+async def test_active_claims_decremented(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+        job1 = await make_job(q, concurrency = 1)
+        await make_pages(q, job1, "hi")
+        claim = await pipe.find_claim_page("", 0)
+        assert claim and claim.payload == "hi"
+        await pipe.finish_attempt(claim.attempt_id)
+        query = sqlalchemy.select(model.jobs.c.active_claims).where(model.jobs.c.job_id == job1)
+        res = await conn.execute(query)
+        assert res.one()[0] == 0
 
 @db._wrap_serialization_failure
 async def _commit(conn):

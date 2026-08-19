@@ -2,4 +2,4 @@
 
 {% block loop_href %} {{ url_for('single_page', page_id = row.page_id, html = True) }} {% endblock %}
 {% block loop_payload %} {{ row.payload }} {% endblock %}
-{% block loop_footer %} Status: {{ macros.page_status(row.status.name, row.attempts_remaining) }} {% endblock %}
+{% block loop_footer %} Status: {{ macros.page_status(row.status.name, row.attempts_remaining) }}{% if row.out_of_scope %} (out of scope) {% endif %} {% endblock %}

@@ -17,6 +17,9 @@ class JobStatus(enum.Enum):
 
     ABORTED = 3
 
+    def is_done(self):
+        return self in (JobStatus.ABORTED, JobStatus.DONE)
+
 class PageStatus(enum.Enum):
     READY = 0
     #DEFERRED = 1
@@ -100,17 +103,12 @@ job_rulesets = Table(
 )
 job_ruleset_columns = (job_rulesets.c.ua, job_rulesets.c.custom_js, job_rulesets.c.skip, job_rulesets.c.accept)
 
-class ClaimLock(enum.Enum):
-    UNTIL_FINISHED = 0
-    INDEFINITELY = 1
-
 claims = Table(
     "claims",
     metadata_obj,
     Column("pipeline_id", sqlalchemy.Text, ForeignKey("pipelines.pipeline_id"), primary_key = True),
     Column("slot", sqlalchemy.SmallInteger, primary_key = True),
     Column("job_id", sqlalchemy.Uuid, ForeignKey("jobs.job_id"), nullable = True),
-    Column("lock", sqlalchemy.Enum(ClaimLock), nullable = True),
 
     Index("claims_index_by_job", "job_id"),
 )
@@ -210,6 +208,7 @@ attempts = Table(
     Column("page_id", sqlalchemy.Uuid, ForeignKey("pages.page_id")),
     Column("pipeline_id", sqlalchemy.Text),
     Column("pipeline_version", sqlalchemy.Text),
+    Column("pipeline_slot", sqlalchemy.SmallInteger),
     Column("error", sqlalchemy.Text, nullable = True, default = None),
     Column("finished", sqlalchemy.Boolean, default = False),
     Column("ruleset_id", sqlalchemy.Uuid),
