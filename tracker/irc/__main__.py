@@ -246,8 +246,10 @@ async def addrule(self: Bot, user: User, ran, args):
             payload = await fetch_custom_js(args.arg)
         else:
             raise RuntimeError("Unreachable code")
-        nid, nidx = await queue.create_job_rule(args.job_id, key, args.add_before, db.JobRule(args.pattern, payload), args.ensure_ruleset)
-    yield f"Created new {key} rule at index {nidx} (new ruleset ID: {nid})."
+        ruleset = await queue.get_job_ruleset(args.job_id, for_update = True)
+        idx = getattr(ruleset, key).add(db.JobRule(args.pattern, payload), args.add_before)
+        nid = await queue.new_ruleset(args.job_id, ruleset, args.ensure_ruleset)
+    yield f"Created new {key} rule at index {idx} (new ruleset ID: {nid})."
 
 @bot.command(("!ignore", "!ig"), required_modes = "+@")
 async def ignore(self: Bot, user: User, ran, job_id, pattern):
@@ -255,8 +257,10 @@ async def ignore(self: Bot, user: User, ran, job_id, pattern):
     job_id = db.parse_id(job_id)
     async with ENGINE.begin() as conn:
         queue = db.Connection(conn)
-        _id, accept_idx = await queue.create_job_rule(job_id, "accept", None, db.JobRule(pattern, False))
-        id, skip_idx = await queue.create_job_rule(job_id, "skip", None, db.JobRule(pattern, True))
+        ruleset = await queue.get_job_ruleset(job_id, for_update = True)
+        accept_idx = ruleset.accept.add(db.JobRule(pattern, False))
+        skip_idx = ruleset.skip.add(db.JobRule(pattern, True))
+        id = await queue.new_ruleset(job_id, ruleset)
         yield f"Created new ruleset {id} (accept index: {accept_idx}, skip index: {skip_idx})"
 
 @bot.add_argument("--index", action = "store_true")
@@ -283,16 +287,21 @@ async def delrule(self: Bot, user: User, ran, args):
             return
     async with ENGINE.begin() as conn:
         queue = db.Connection(conn)
+        ruleset = await queue.get_job_ruleset(args.job_id)
         if args.index:
-            ruleset_id, old_rule = await queue.remove_job_rule(args.job_id, key, int(args.pattern_or_index), args.ensure_ruleset)
-            message = f"Removed {key} rule {old_rule} (new ruleset ID: {ruleset_id})."
+            old_rule = getattr(ruleset, key).remove(int(args.pattern_or_index))
+            message = f"Removed {key} rule {old_rule} (new ruleset ID: %s)."
         else:
-            ruleset_id, num_removed = await queue.remove_job_rules_by_scope(args.job_id, key, args.pattern_or_index, args.ensure_ruleset)
+            if key == "all":
+                num_removed = ruleset.remove_all_by_scope(args.pattern_or_index)
+            else:
+                num_removed = getattr(ruleset, key).remove_by_scope(args.pattern_or_index)
             if num_removed == 0:
                 raise CustomMessageException("No rule with that pattern was found.")
             s = "" if num_removed == 1 else "s"
-            message = f"Removed {num_removed} rule{s} (new ruleset ID: {ruleset_id})."
-    yield message
+            message = f"Removed {num_removed} rule{s} (new ruleset ID: %s)."
+        nid = await queue.new_ruleset(args.job_id, ruleset, args.ensure_ruleset)
+    yield message % nid
 
 @bot.command({"!concurrency", "!con"}, required_modes = "+@")
 async def concurrency(self: Bot, user: User, ran, job_id, num):
@@ -305,7 +314,8 @@ async def concurrency(self: Bot, user: User, ran, job_id, num):
         return
     async with ENGINE.begin() as conn:
         q = sqlalchemy.update(model.jobs).where(model.jobs.c.job_id == job_id).values(concurrency = num)
-        await conn.execute(q)
+        res = await conn.execute(q)
+        assert res.rowcount == 1
     yield f"Updated concurrency of {job_id} to {num}."
 
 async def generate_status_message(job: str, queue: db.Connection):
@@ -364,7 +374,7 @@ async def explain(self: Bot, user: User, ran, id, *reason):
             yield "No item was found."
 
 @bot.command("!depth", required_modes = "+@")
-async def depth(self: Bot, user: User, ran, id, job_id, newval):
+async def depth(self: Bot, user: User, ran, job_id, newval):
     depth = validate_depth(newval)
     job_id = db.parse_id(job_id)
     async with ENGINE.begin() as conn:

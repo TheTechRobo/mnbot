@@ -212,9 +212,9 @@ async def test_claiming(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         job2 = await make_job(q, concurrency = 1)
         async def check_claim_count(expected1, expected2):
             q = sqlalchemy.select(model.jobs.c.active_claims).where(model.jobs.c.job_id == job)
-            val = (await conn.execute(q)).first()[0]
+            val = (await conn.execute(q)).one()[0]
             q = sqlalchemy.select(model.jobs.c.active_claims).where(model.jobs.c.job_id == job2)
-            val2 = (await conn.execute(q)).first()[0]
+            val2 = (await conn.execute(q)).one()[0]
             assert (val, val2) == (expected1, expected2)
 
         await q.create_pipeline("pipe", False, "password")
@@ -458,8 +458,9 @@ async def test_update_job_status_with_skip(engine: sqlalchemy.ext.asyncio.AsyncE
         await q.create_pipeline("pipe", False, "password")
         pipe = await q.pipeline("pipe", 0)
 
-        job1 = await make_job(q, concurrency = 1)
-        await q.create_job_rule(job1, "skip", None, db.JobRule("", True))
+        initial_ruleset = default_ruleset()
+        initial_ruleset.skip.add(db.JobRule("", True))
+        job1 = await make_job(q, concurrency = 1, initial_ruleset = initial_ruleset)
         await make_pages(q, job1, "foo")
         # update_job_status will not be aware of the SKIP rule
         assert (await q.update_job_status(job1)) == model.JobStatus.ACTIVE
@@ -628,6 +629,24 @@ async def test_tag_rowcount(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         await get()
 
 @_test
+async def test_new_job_ruleset(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job1 = await make_job(q)
+
+        tmp_ruleset = default_ruleset()
+        tmp_ruleset.accept.default = True
+
+        rs1 = await q.get_job_ruleset(job1)
+        tmp_ruleset.job_ruleset_id = rs1.job_ruleset_id
+        assert tmp_ruleset != rs1
+        with pytest.raises(db.RulesetConflict):
+            await q.new_ruleset(job1, tmp_ruleset, db.generate_id())
+        assert (await q.get_job_ruleset(job1)) == rs1
+        tmp_ruleset.job_ruleset_id = await q.new_ruleset(job1, tmp_ruleset, rs1.job_ruleset_id)
+        assert (await q.get_job_ruleset(job1)) == tmp_ruleset
+
+@_test
 async def test_job_rule_insertion(engine: sqlalchemy.ext.asyncio.AsyncEngine):
     """
     Tests create_job_rule and remove_job_rule.
@@ -636,21 +655,23 @@ async def test_job_rule_insertion(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         q = db.Connection(conn)
         await q.create_pipeline("pipe", False, "password")
         pipe = await q.pipeline("pipe", 0)
-        initial_ruleset = default_ruleset()
-        initial_ruleset.ua.default = "quux"
-        job1 = await make_job(q, initial_ruleset = initial_ruleset)
 
         # Create our job rules
-        _, ua_1 = await q.create_job_rule(job1, "ua", None, db.JobRule("^https?://", "minimal"))
-        _, cjs_1 = await q.create_job_rule(job1, "custom_js", None, db.JobRule("^https?://", "foo"))
-        _, ua_2 = await q.create_job_rule(job1, "ua", None, db.JobRule("^https?://example.org$", "stealth"))
-        rs3, cjs_2 = await q.create_job_rule(job1, "custom_js", cjs_1, db.JobRule("https?://", "bar"))
-        # Test ensure_ruleset, both valid and invalid
-        rs4, skip_1 = await q.create_job_rule(job1, "skip", None, db.JobRule("", True), ensure_ruleset = rs3)
-        with pytest.raises(db.RulesetConflict):
-            await q.create_job_rule(job1, "custom_js", None, db.JobRule("", "baz"), ensure_ruleset = rs3)
+        initial_ruleset = default_ruleset()
+        initial_ruleset.ua.default = "quux"
+        initial_ruleset.ua.add(db.JobRule("^https?://", "minimal"))
+
+        job1 = await make_job(q, initial_ruleset = initial_ruleset)
+
         ruleset = await q.get_job_ruleset(job1)
-        assert ruleset.job_ruleset_id == rs4, "Ruleset ID changed unexpectedly!"
+        ruleset.ua.add(db.JobRule("^https?://example.org$", "stealth"))
+        cjs_1 = ruleset.custom_js.add(db.JobRule("^https?://", "foo"))
+        ruleset.custom_js.add(db.JobRule("https?://", "bar"), cjs_1)
+        skip_1 = ruleset.skip.add(db.JobRule("", True))
+        new_id = await q.new_ruleset(job1, ruleset)
+        from_db = await q.get_job_ruleset(job1)
+        ruleset.job_ruleset_id = new_id
+        assert ruleset == from_db
         assert [rule.scope for rule in ruleset.ua.rules] == ["^https?://", "^https?://example.org$"]
         assert [rule.scope for rule in ruleset.custom_js.rules] == ["https?://", "^https?://"]
         assert [rule.scope for rule in ruleset.skip.rules] == [""]
@@ -665,8 +686,8 @@ async def test_job_rule_insertion(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         assert (await pipe._find_claimable_page(job1)) is None
 
         # No more skip rule...
-        await q.remove_job_rule(job1, "skip", skip_1)
-        ruleset = await q.get_job_ruleset(job1)
+        ruleset.skip.remove(skip_1)
+        ruleset.job_ruleset_id = await q.new_ruleset(job1, ruleset)
         # Ensure the correct one (i.e. the empty regex) was removed, and that computed page settings change accordingly
         assert [rule.scope for rule in ruleset.ua.rules] == ["^https?://", "^https?://example.org$"]
         assert [rule.scope for rule in ruleset.custom_js.rules] == ["https?://", "^https?://"]
@@ -677,153 +698,98 @@ async def test_job_rule_insertion(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         info = await pipe._find_claimable_page(job1)
         assert info == db.PendingPage(page1, "https://example.org/", ruleset.job_ruleset_id, db.PageSettings(ua = "minimal", custom_js = "foo", skip = initial_ruleset.skip.default, accept = initial_ruleset.accept.default))
 
-        rm1, oldval = await q.remove_job_rule(job1, "ua", 0)
+        oldval = ruleset.ua.remove(0)
         assert oldval.scope == "^https?://"
-        with pytest.raises(db.NoSuchThingError):
-            await q.remove_job_rule(job1, "ua", 1, ensure_ruleset = rm1)
+        with pytest.raises(IndexError):
+            ruleset.ua.remove(1)
+        await q.new_ruleset(job1, ruleset)
         assert [rule.scope for rule in (await q.get_job_ruleset(job1)).ua.rules] == ["^https?://example.org$"]
-        rm2, oldval = await q.remove_job_rule(job1, "ua", 0, ensure_ruleset = rm1)
+        oldval = ruleset.ua.remove(0)
         assert oldval.scope == "^https?://example.org$"
-        assert (await q.get_job_ruleset(job1)).ua.rules == []
+        assert ruleset.ua.rules == []
 
-        with pytest.raises(db.RulesetConflict):
-            await q.remove_job_rule(job1, "custom_js", 0, ensure_ruleset = rm1)
-        await q.remove_job_rule(job1, "custom_js", 0, ensure_ruleset = rm2)
-        await q.remove_job_rule(job1, "custom_js", 0)
-        ruleset = await q.get_job_ruleset(job1)
+        ruleset.custom_js.remove(0)
+        ruleset.custom_js.remove(0)
         assert ruleset.skip.rules + ruleset.accept.rules + ruleset.custom_js.rules + ruleset.ua.rules == []
+        ruleset.job_ruleset_id = await q.new_ruleset(job1, ruleset)
 
         assert db.PageSettings.from_ruleset("", ruleset).ua == "quux"
 
-        with pytest.raises(db.NoSuchThingError):
-            await q.create_job_rule(job1, "ua", 1000, db.JobRule("", "hi"))
-        with pytest.raises(db.NoSuchThingError):
-            await q.remove_job_rule(job1, "ua", 1000)
+        with pytest.raises(IndexError):
+            ruleset.ua.add(db.JobRule("", "hi"), 1000)
+        with pytest.raises(IndexError):
+            ruleset.ua.remove(1000)
+        assert (await q.get_job_ruleset(job1)) == ruleset
+
+# Test ensure_ruleset
+# Ensure conflicts don't change the ID
 
 @_test
-async def test_job_rule_removal_by_scope(engine: sqlalchemy.ext.asyncio.AsyncEngine):
-    async with engine.connect() as conn:
-        q = db.Connection(conn)
-        job1 = await make_job(q)
+async def test_job_rule_removal_by_scope():
+    ruleset = default_ruleset()
+    assert ruleset.ua.add(db.JobRule("foo", "")) == 0
+    assert ruleset.ua.add(db.JobRule("bar", "")) == 1
+    assert ruleset.ua.add(db.JobRule("foo", "")) == 2
+    assert ruleset.ua.add(db.JobRule("foo", "")) == 3
+    assert ruleset.skip.add(db.JobRule("foo", False)) == 0
 
-        rs1, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("foo", ""))
-        assert idx == 0
-        rs2, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("bar", ""), ensure_ruleset = rs1)
-        assert idx == 1
-        rs3, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("foo", ""))
-        assert idx == 2
-        rs4, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("foo", ""))
-        assert idx == 3
-        rs5, idx = await q.create_job_rule(job1, "skip", None, db.JobRule("foo", False))
-        assert idx == 0
+    assert ruleset.ua.rules == [db.JobRule("foo", ""), db.JobRule("bar", ""), db.JobRule("foo", ""), db.JobRule("foo", "")]
+    assert ruleset.skip.rules == [db.JobRule("foo", False)]
 
-        ruleset5 = await q.get_job_ruleset(job1)
-        assert rs5 == ruleset5.job_ruleset_id
-        assert ruleset5.ua.rules == [db.JobRule("foo", ""), db.JobRule("bar", ""), db.JobRule("foo", ""), db.JobRule("foo", "")]
-        assert ruleset5.skip.rules == [db.JobRule("foo", False)]
+    assert ruleset.ua.remove_by_scope("foo") == 3
+    assert ruleset.ua.rules == [db.JobRule("bar", "")]
+    assert ruleset.skip.rules == [db.JobRule("foo", False)]
+    assert ruleset.ua.remove_by_scope("foo") == 0
+    assert ruleset.ua.rules == [db.JobRule("bar", "")]
+    assert ruleset.skip.rules == [db.JobRule("foo", False)]
 
-        rs6, num_removed = await q.remove_job_rules_by_scope(job1, "ua", "foo", rs5)
-        assert num_removed == 3
-
-        ruleset6 = await q.get_job_ruleset(job1)
-        assert rs6 == ruleset6.job_ruleset_id
-        assert ruleset6.ua.rules == [db.JobRule("bar", "")]
-        assert ruleset6.skip.rules == [db.JobRule("foo", False)]
-
-        with pytest.raises(db.RulesetConflict):
-            await q.remove_job_rules_by_scope(job1, "ua", "foo", rs5)
-
-        rs6_, num_removed = await q.remove_job_rules_by_scope(job1, "ua", "foo", rs6)
-        assert num_removed == 0
-        assert rs6_ == rs6
-
-        rs7, num_removed = await q.remove_job_rules_by_scope(job1, "ua", "bar", rs6)
-        assert num_removed == 1
-        rs7_, num_removed = await q.remove_job_rules_by_scope(job1, "ua", "bar", rs7)
-        assert num_removed == 0
-        assert rs7_ == rs7
-
-        ruleset7 = await q.get_job_ruleset(job1)
-        assert ruleset7.job_ruleset_id == rs7
-        assert ruleset7.ua.rules == []
-        assert ruleset7.skip.rules == [db.JobRule("foo", False)]
+    assert ruleset.ua.remove_by_scope("bar") == 1
+    assert ruleset.ua.remove_by_scope("bar") == 0
+    assert ruleset.ua.rules == []
+    assert ruleset.skip.rules == [db.JobRule("foo", False)]
 
 @_test
-async def test_job_rule_removal_by_scope_all(engine: sqlalchemy.ext.asyncio.AsyncEngine):
-    async with engine.connect() as conn:
-        q = db.Connection(conn)
-        job1 = await make_job(q)
+async def test_job_rule_removal_by_scope_all():
+    ruleset = default_ruleset()
+    assert ruleset.ua.add(db.JobRule("foo", "")) == 0
+    assert ruleset.ua.add(db.JobRule("bar", "")) == 1
+    assert ruleset.ua.add(db.JobRule("foo", "")) == 2
+    assert ruleset.ua.add(db.JobRule("foo", "")) == 3
+    assert ruleset.skip.add(db.JobRule("foo", False)) == 0
 
-        rs1, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("foo", ""))
-        assert idx == 0
-        rs2, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("bar", ""), ensure_ruleset = rs1)
-        assert idx == 1
-        rs3, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("foo", ""))
-        assert idx == 2
-        rs4, idx = await q.create_job_rule(job1, "ua", None, db.JobRule("foo", ""))
-        assert idx == 3
-        rs5, idx = await q.create_job_rule(job1, "skip", None, db.JobRule("foo", False))
-        assert idx == 0
+    assert ruleset.ua.rules == [db.JobRule("foo", ""), db.JobRule("bar", ""), db.JobRule("foo", ""), db.JobRule("foo", "")]
+    assert ruleset.skip.rules == [db.JobRule("foo", False)]
 
-        ruleset5 = await q.get_job_ruleset(job1)
-        assert rs5 == ruleset5.job_ruleset_id
-        assert ruleset5.ua.rules == [db.JobRule("foo", ""), db.JobRule("bar", ""), db.JobRule("foo", ""), db.JobRule("foo", "")]
-        assert ruleset5.skip.rules == [db.JobRule("foo", False)]
-
-        rs6, num_removed = await q.remove_job_rules_by_scope(job1, "all", "foo", rs5)
-        assert num_removed == 4
-        ruleset6 = await q.get_job_ruleset(job1)
-        assert ruleset6.job_ruleset_id == rs6
-        assert ruleset6.ua.rules == [db.JobRule("bar", "")]
-        assert ruleset6.skip.rules == []
+    assert ruleset.remove_all_by_scope("foo") == 4
+    assert ruleset.ua.rules == [db.JobRule("bar", "")]
+    assert ruleset.skip.rules == []
 
 @_test
-async def test_job_rule_edge_cases(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+async def test_job_rule_edge_cases():
     """
     Tests some possible edge cases related to job rulesets.
     """
-    async with engine.connect() as conn:
-        q = db.Connection(conn)
-        initial_ruleset = default_ruleset()
-        job1 = await make_job(q, initial_ruleset = initial_ruleset)
+    ruleset = default_ruleset()
 
-        # This ruleset is empty! Deletion shouldn't work.
-        with pytest.raises(db.NoSuchThingError):
-            await q.remove_job_rule(job1, "accept", 0, initial_ruleset.job_ruleset_id)
+    # This ruleset is empty! Deletion shouldn't work.
+    with pytest.raises(IndexError):
+        ruleset.accept.remove(0)
 
-        # Negative indexing probably shouldn't be allowed.
-        with pytest.raises(db.NoSuchThingError):
-            await q.create_job_rule(job1, "skip", -1, db.JobRule("", False))
-        # Inserting at len(rules) to append is not supported.
-        with pytest.raises(db.NoSuchThingError):
-            await q.create_job_rule(job1, "custom_js", 0, db.JobRule("", None))
-        # No writes have actually gone through, so the ID should remain unchanged.
-        ruleset2 = await q.get_job_ruleset(job1)
-        assert initial_ruleset.job_ruleset_id == ruleset2.job_ruleset_id
-        await q.create_job_rule(job1, "custom_js", None, db.JobRule("", None))
-        # And check negative indexing when there *is* a rule, too.
-        with pytest.raises(db.NoSuchThingError):
-            await q.create_job_rule(job1, "custom_js", -1, db.JobRule("", None))
-        with pytest.raises(db.NoSuchThingError):
-            await q.remove_job_rule(job1, "custom_js", -1)
-        # Removing len(rules) should definitely not work.
-        with pytest.raises(db.NoSuchThingError):
-            await q.remove_job_rule(job1, "custom_js", 1)
-
-        # Ensure that conflicts do not change the ID either.
-        ruleset3 = await q.get_job_ruleset(job1)
-        with pytest.raises(db.RulesetConflict):
-            await q.create_job_rule(job1, "ua", None, db.JobRule("", "default"), initial_ruleset.job_ruleset_id)
-        ruleset4 = await q.get_job_ruleset(job1)
-        assert ruleset3.job_ruleset_id == ruleset4.job_ruleset_id
-        assert ruleset3 == ruleset4
-
-        with pytest.raises(ValueError):
-            await q.create_job_rule(job1, "nonexistent", None, db.JobRule("", ""))
-        with pytest.raises(ValueError):
-            await q.remove_job_rule(job1, "nonexistent", 0)
-        with pytest.raises(ValueError):
-            await q.remove_job_rules_by_scope(job1, "nonexistent", "")
+    # Negative indexing probably shouldn't be allowed.
+    with pytest.raises(IndexError):
+        ruleset.skip.add(db.JobRule("", False), -1)
+    # Inserting at len(rules) to append is not supported.
+    with pytest.raises(IndexError):
+        ruleset.custom_js.add(db.JobRule("", None), 0)
+    # And check negative indexing when there *is* a rule, too.
+    ruleset.custom_js.add(db.JobRule("", None))
+    with pytest.raises(IndexError):
+        ruleset.custom_js.add(db.JobRule("", None), -1)
+    with pytest.raises(IndexError):
+        ruleset.custom_js.remove(-1)
+    # Removing len(rules) should definitely not work.
+    with pytest.raises(IndexError):
+        ruleset.custom_js.remove(1)
 
 @_test
 async def test_ruleset_removal_order(engine: sqlalchemy.ext.asyncio.AsyncEngine):
@@ -834,23 +800,24 @@ async def test_ruleset_removal_order(engine: sqlalchemy.ext.asyncio.AsyncEngine)
     async with engine.connect() as conn:
         q = db.Connection(conn)
         job1 = await make_job(q, concurrency = 1)
+        ruleset = await q.get_job_ruleset(job1)
 
         for scope in ("foo", "removeme", "bar", "removeme", "baz", "quux"):
-            await q.create_job_rule(job1, "ua", None, db.JobRule(scope, "default"))
-        await q.create_job_rule(job1, "skip", None, db.JobRule("apple", True))
-        await q.remove_job_rule(job1, "ua", 0)
-        await q.remove_job_rule(job1, "ua", 4)
-        ruleset = await q.get_job_ruleset(job1)
+            ruleset.ua.add(db.JobRule(scope, "default"))
+        ruleset.skip.add(db.JobRule("apple", True))
+        new_id = await q.new_ruleset(job1, ruleset)
+        ruleset.job_ruleset_id = new_id
+        assert ruleset == await q.get_job_ruleset(job1)
+        ruleset.ua.remove(0)
+        ruleset.ua.remove(4)
         assert [rule.scope for rule in ruleset.ua.rules] == ["removeme", "bar", "removeme", "baz"]
         assert [rule.scope for rule in ruleset.skip.rules] == ["apple"]
         assert [rule.scope for rule in ruleset.accept.rules] == []
         assert [rule.scope for rule in ruleset.custom_js.rules] == []
-        await q.remove_job_rules_by_scope(job1, "ua", "removeme")
-        ruleset = await q.get_job_ruleset(job1)
+        ruleset.ua.remove_by_scope("removeme")
         assert [rule.scope for rule in ruleset.ua.rules] == ["bar", "baz"]
         assert [rule.scope for rule in ruleset.skip.rules] == ["apple"]
-        await q.remove_job_rules_by_scope(job1, "skip", "apple")
-        ruleset = await q.get_job_ruleset(job1)
+        ruleset.skip.remove_by_scope("apple")
         assert [rule.scope for rule in ruleset.ua.rules] == ["bar", "baz"]
         assert [rule.scope for rule in ruleset.skip.rules] == []
 
@@ -859,9 +826,12 @@ async def test_many_skipped_jobs(engine: sqlalchemy.ext.asyncio.AsyncEngine):
     async with engine.connect() as conn:
         q = db.Connection(conn)
         job1 = await make_job(q, concurrency = 1)
-        await q.create_job_rule(job1, "skip", None, db.JobRule("^skipped_", True))
+        ruleset = await q.get_job_ruleset(job1)
+        ruleset.skip.add(db.JobRule("^skipped_", True))
+        await q.new_ruleset(job1, ruleset)
         await make_pages(q, job1, *[f"skipped_{i}" for i in range(100)], "hello")
-        await q.create_job_rule(job1, "ua", None, db.JobRule("", "stealth"))
+        ruleset.ua.add(db.JobRule("", "stealth"))
+        await q.new_ruleset(job1, ruleset)
         await q.create_pipeline("pipe", False, "password")
         pipe = await q.pipeline("pipe", 0)
 

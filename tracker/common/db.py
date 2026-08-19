@@ -10,7 +10,6 @@ import dataclasses
 import enum
 import typing
 import os
-import regex
 import logging
 
 import uuid_utils.compat as uuid
@@ -25,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 import asyncpg
 
 from . import model
+from .ruleset import *
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
@@ -128,7 +128,7 @@ class JobCreation:
     created_by: str
     metadata: dict
     initial_page: str
-    initial_ruleset: "JobRuleset"
+    initial_ruleset: JobRuleset
 
     status: model.JobStatus = model.JobStatus.ACTIVE
     concurrency: int = 0
@@ -218,93 +218,6 @@ def _find_claimable_job_q(pipeline: str | None, matchonly: bool, include_existin
     return q
 
 @dataclasses.dataclass
-class JobRule[T]:
-    scope: str
-    payload: T
-
-    def __post_init__(self):
-        self._compiled_scope = regex.compile(self.scope)
-
-    @property
-    def compiled_scope(self):
-        return self._compiled_scope
-
-    def for_db(self):
-        return (self.scope, self.payload)
-
-    def matches(self, url):
-        return bool(self._compiled_scope.search(url, timeout = 15))
-
-RulesetPayload = typing.TypeVar("RulesetPayload")
-
-@dataclasses.dataclass
-class RulesetColumn[RulesetPayload]:
-    default: RulesetPayload
-    rules: list[JobRule[RulesetPayload]]
-
-    def compute_for(self, url: str) -> RulesetPayload:
-        item = self.default
-        for rule in self.rules:
-            if rule.matches(url):
-                item = rule.payload
-        return item
-
-@dataclasses.dataclass
-class JobRuleset:
-    job_ruleset_id: model.UUID
-    all_columns = ("ua", "custom_js", "skip", "accept")
-
-    ua: RulesetColumn[str]
-    custom_js: RulesetColumn[str | None]
-    skip: RulesetColumn[bool]
-    accept: RulesetColumn[bool]
-
-    @staticmethod
-    def _make_column(value):
-        return RulesetColumn(value[0], [JobRule(scope, payload) for scope, payload in value[1]])
-
-    @staticmethod
-    def _encode_column(column: RulesetColumn):
-        return (column.default, [rule.for_db() for rule in column.rules])
-
-    @classmethod
-    def from_row(cls, row):
-        return cls(
-            job_ruleset_id = row.job_ruleset_id,
-            ua = cls._make_column(row.ua),
-            custom_js = cls._make_column(row.custom_js),
-            skip = cls._make_column(row.skip),
-            accept = cls._make_column(row.accept),
-        )
-
-    def for_db(self, job_id: model.UUID | None = None):
-        aux = {"job_id": job_id} if job_id else {}
-        return {
-                "job_ruleset_id": self.job_ruleset_id,
-                "ua": self._encode_column(self.ua),
-                "custom_js": self._encode_column(self.custom_js),
-                "skip": self._encode_column(self.skip),
-                "accept": self._encode_column(self.accept),
-        } | aux
-
-@dataclasses.dataclass
-class PageSettings:
-    ua: str
-    custom_js: str | None
-    skip: bool
-    accept: bool
-
-    @classmethod
-    def from_ruleset(cls, url: str, ruleset: JobRuleset) -> typing.Self:
-        kwargs = {}
-        for key, column in (("ua", ruleset.ua), ("custom_js", ruleset.custom_js), ("skip", ruleset.skip), ("accept", ruleset.accept)):
-            kwargs[key] = column.compute_for(url)
-        return cls(**kwargs)
-
-    def as_dict(self):
-        return dataclasses.asdict(self)
-
-@dataclasses.dataclass
 class PageClaimInfo:
     page_id: model.UUID
     job_id: model.UUID
@@ -344,7 +257,7 @@ class Connection:
     @_wrap_serialization_failure
     async def create_jobs(self, jobs: typing.Iterable[JobCreation]):
         """
-        Adds jobs to the database.
+        Adds jobs to the database. (initial_ruleset.job_ruleset_id is ignored.)
         """
         values = []
         rulesets = []
@@ -361,7 +274,7 @@ class Connection:
                 metadata = job.metadata,
                 depth = job.depth,
             ))
-            rulesets.append(job.initial_ruleset.for_db() | {"job_id": job.job_id})
+            rulesets.append(job.initial_ruleset.for_db() | {"job_id": job.job_id, "job_ruleset_id": generate_id()})
         await self.conn.execute(sqlalchemy.insert(model.jobs), values)
         await self.conn.execute(sqlalchemy.insert(model.job_rulesets), rulesets)
 
@@ -369,7 +282,6 @@ class Connection:
     def canon_for_ssurt(cls, url: str) -> urlcanon.ParsedUrl:
         """
         Aggressive canonicalization, from the urlcanon library.
-        I suspect this is what the WBM uses.
         This is intended for indexing, and not for general crawling use.
         """
         return urlcanon.aggressive(url)
@@ -675,118 +587,33 @@ class Connection:
         return rules
 
     @_wrap_serialization_failure
-    async def new_ruleset(self, job_id: model.UUID, ruleset: JobRuleset):
+    async def new_ruleset(self, job_id: model.UUID, ruleset: JobRuleset, ensure_ruleset: model.UUID | None = None) -> model.UUID:
         """
         Sets a job's ruleset, overriding previous ones.
-        Throws RulesetConflict if a newer ruleset ID exists, which could be caused by a bad system clock.
+        Throws RulesetConflict if ensure_ruleset is neither None nor the latest ruleset.
+        Returns the new ID.
         """
-        # Ensure newer ruleset ID does not exist
+        ruleset_id = generate_id()
+        # Ensure newer ruleset ID does not exist, which could be caused e.g. by a bad system clock
         # Serializable isolation should prevent any race condition here
         q = (
             sqlalchemy.select(model.job_rulesets.c.job_ruleset_id)
             .where(model.job_rulesets.c.job_id == job_id)
-            .where(model.job_rulesets.c.job_ruleset_id >= ruleset.job_ruleset_id)
+            .where(model.job_rulesets.c.job_ruleset_id >= ruleset_id)
             .limit(1)
         )
         row = (await self.conn.execute(q)).one_or_none()
         if row:
             raise RulesetConflict(row[0])
+        if ensure_ruleset:
+            current_latest = (await self.get_job_ruleset(job_id, for_update = True)).job_ruleset_id
+            if current_latest != ensure_ruleset:
+                raise RulesetConflict(current_latest)
 
         # Insert new ruleset
         q = sqlalchemy.insert(model.job_rulesets)
-        await self.conn.execute(q, ruleset.for_db() | {"job_id": job_id})
-
-    @_wrap_serialization_failure
-    async def create_job_rule(self, job_id: model.UUID, rule_category: str, before_rule: int | None, rule: JobRule, ensure_ruleset: model.UUID | None = None) -> tuple[model.UUID, int]:
-        """
-        Creates a job rule before the given rule position, or None to append to the end.
-
-        If ensure_ruleset is not None, and the currently-active ruleset does *not* have that ID,
-        RulesetConflict will be raised.
-
-        Returns the new ruleset ID and the new rule index.
-        """
-        if rule_category not in JobRuleset.all_columns:
-            raise ValueError(f"Invalid rule category {rule_category}")
-        current_ruleset = await self.get_job_ruleset(job_id, for_update = True)
-        if ensure_ruleset is not None:
-            if ensure_ruleset != current_ruleset.job_ruleset_id:
-                raise RulesetConflict(current_ruleset.job_ruleset_id)
-        col: RulesetColumn = getattr(current_ruleset, rule_category)
-        if before_rule is None:
-            col.rules.append(rule)
-            position = len(col.rules) - 1
-        else:
-            if before_rule >= len(col.rules) or before_rule < 0:
-                raise NoSuchThingError(before_rule)
-            col.rules.insert(before_rule, rule)
-            position = before_rule
-        new_id = generate_id()
-        current_ruleset.job_ruleset_id = new_id
-        await self.new_ruleset(job_id, current_ruleset)
-        return new_id, position
-
-    @_wrap_serialization_failure
-    async def remove_job_rule(self, job_id: model.UUID, rule_category: str, index: int, ensure_ruleset: model.UUID | None = None) -> tuple[model.UUID, JobRule]:
-        """
-        Removes a given job rule. If the rule does not exist, raises NoSuchThingError.
-
-        Raises RulesetConflict if the ensure_ruleset check fails.
-        Returns the new ruleset ID and the old rule value.
-        """
-        if rule_category not in JobRuleset.all_columns:
-            raise ValueError(f"Invalid rule category {rule_category}")
-        current_ruleset = await self.get_job_ruleset(job_id, for_update = True)
-        if ensure_ruleset is not None:
-            if ensure_ruleset != current_ruleset.job_ruleset_id:
-                raise RulesetConflict(current_ruleset.job_ruleset_id)
-        if index < 0:
-            raise NoSuchThingError(index)
-        col: RulesetColumn = getattr(current_ruleset, rule_category)
-        try:
-            old_val = col.rules.pop(index)
-        except IndexError:
-            raise NoSuchThingError(index)
-        new_id = generate_id()
-        current_ruleset.job_ruleset_id = new_id
-        await self.new_ruleset(job_id, current_ruleset)
-        return new_id, old_val
-
-
-    @_wrap_serialization_failure
-    async def remove_job_rules_by_scope(self, job_id: model.UUID, rule_category: str, scope: str, ensure_ruleset: model.UUID | None = None) -> tuple[model.UUID, int]:
-        """
-        Remove all job rules with the given scope. The special category 'all' applies to all categories.
-        Returns the new ruleset ID and the number of rules removed.
-        (If no values are removed, it will return the existing ruleset ID instead.)
-
-        Raises RulesetConflict if the ensure_ruleset check fails.
-        """
-        current_ruleset = await self.get_job_ruleset(job_id, for_update = True)
-        values_removed = 0
-        if ensure_ruleset is not None:
-            if ensure_ruleset != current_ruleset.job_ruleset_id:
-                raise RulesetConflict(current_ruleset.job_ruleset_id)
-        if rule_category == "all":
-            categories = JobRuleset.all_columns
-        elif rule_category in JobRuleset.all_columns:
-            categories = (rule_category,)
-        else:
-            raise ValueError(f"Invalid rule category {rule_category}")
-        for category in categories:
-            new_rules = []
-            old_col: RulesetColumn = getattr(current_ruleset, category)
-            for rule in old_col.rules:
-                if rule.scope == scope:
-                    values_removed += 1
-                    continue
-                new_rules.append(rule)
-            old_col.rules = new_rules
-        if not values_removed:
-            return current_ruleset.job_ruleset_id, 0
-        current_ruleset.job_ruleset_id = generate_id()
-        await self.new_ruleset(job_id, current_ruleset)
-        return current_ruleset.job_ruleset_id, values_removed
+        await self.conn.execute(q, ruleset.for_db() | {"job_id": job_id, "job_ruleset_id": ruleset_id})
+        return ruleset_id
 
     @classmethod
     def _page_depth(cls, page_id):
