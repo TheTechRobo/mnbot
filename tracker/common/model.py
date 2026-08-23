@@ -141,7 +141,7 @@ pages_dequeue_index = Index(
 relations = Table(
     "relations",
     metadata_obj,
-    Column("relation_id", sqlalchemy.Integer, sqlalchemy.Identity(), primary_key = True),
+    Column("relation_id", sqlalchemy.BigInteger, sqlalchemy.Identity(), primary_key = True),
     Column("page_id", sqlalchemy.Uuid, sqlalchemy.ForeignKey(pages.c.page_id)),
     Column("job_id", sqlalchemy.Uuid, sqlalchemy.ForeignKey("jobs.job_id")),
     Column("parent_page", sqlalchemy.Uuid, sqlalchemy.ForeignKey("pages.page_id"), nullable = True),
@@ -156,41 +156,55 @@ relations_depth_function = sqlalchemy.DDL("""
 CREATE FUNCTION update_relation_depth() RETURNS trigger AS $update_relation_depth$
     DECLARE
         existing_depth INTEGER; -- The existing lowest depth for the page.
-        delta_depth INTEGER;
+
+        loop_parents relations.parent_page%%TYPE[];
+        loop_children relations.parent_page%%TYPE[];
+        seen_relations relations.relation_id%%TYPE[];
+        child_row RECORD;
+        new_depth integer;
     BEGIN
-        -- Calculate the current shortest path to any parent relation.
+        -- Retrieve the current shortest path to any relation of the parent page, then add 1. That'll be this relation's depth.
         -- If there is no parent, assume depth is 0.
         IF NEW.parent_page IS NULL THEN
             NEW.depth := 0;
         ELSE
             SELECT MIN(depth) + 1 INTO NEW.depth FROM relations WHERE page_id = NEW.parent_page;
+            IF NEW.depth IS NULL THEN
+                RAISE EXCEPTION 'Parent page does not exist!';
+            END IF;
         END IF;
-        -- Calculate the current shortest path to any relation of this page.
+
+        -- Retrieve the current shortest path to any relation of this page.
+        -- If the new depth isn't lower, or there are no existing relations, we've nothing to do.
         SELECT MIN(depth) INTO existing_depth FROM relations WHERE page_id = NEW.page_id;
-        -- If existing_depth is NULL, the page has no existing relations, so there is nothing more to do.
-        IF existing_depth IS NULL THEN
+        IF (existing_depth IS NULL) OR (NEW.depth >= existing_depth) THEN
             RETURN NEW;
         END IF;
-        -- Calculate the difference between the new relation's depth and the current minimum for the page.
-        delta_depth := NEW.depth - existing_depth;
-        -- If it is negative, the existing depth is higher - we've found a shorter path and now need to
-        -- update the relation's children. Otherwise, there is nothing more to do.
-        IF delta_depth >= 0 THEN
-            RETURN NEW;
-        END IF;
-        UPDATE relations
-            SET depth = relations.depth + delta_depth
-            WHERE relations.job_id = NEW.job_id
-            AND relations.relation_id IN (
-                WITH RECURSIVE CTE (page_id, relation_id) AS (
-                    SELECT r.page_id, r.relation_id FROM relations AS r WHERE parent_page = NEW.page_id
-                    UNION
-                    SELECT r.page_id, r.relation_id FROM relations AS r
-                        INNER JOIN CTE ON CTE.page_id = r.parent_page
-                )
-                SELECT relation_id FROM CTE
-            )
-        ;
+
+        -- Recursively update children with their new depth, if the new depth is lower than their existing depth.
+        -- Because only one relation has been inserted per trigger call, and we're doing breadth first, we can safely
+        -- ignore a relation's children if its depth is unchanged.
+        -- The idea is to be very similar to a cascading UPDATE trigger, but without cycles causing problems
+        -- (as we store every ID we've seen in seen_relations and filter only for relations that *aren't* in there).
+        seen_relations := ARRAY[]::integer[];
+        new_depth := NEW.depth;
+        loop_parents := ARRAY[NEW.page_id]; -- Start with the current relation.
+        LOOP
+            -- Once we've reached the end, this array will be empty.
+            EXIT WHEN cardinality(loop_parents) = 0;
+            new_depth := new_depth + 1;
+            loop_children := ARRAY[]::uuid[];
+            FOR child_row IN
+                UPDATE relations
+                SET depth = new_depth
+                WHERE (parent_page = ANY(loop_parents)) AND NOT (relation_id = ANY(seen_relations)) AND (new_depth < relations.depth)
+                RETURNING relation_id, page_id
+            LOOP
+                loop_children := array_append(loop_children, child_row.page_id);
+                seen_relations := array_append(seen_relations, child_row.relation_id);
+            END LOOP;
+            loop_parents := loop_children;
+        END LOOP;
         RETURN NEW;
     END
 $update_relation_depth$ LANGUAGE plpgsql;

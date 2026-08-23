@@ -115,11 +115,11 @@ async def make_job(q, status = model.JobStatus.ACTIVE, concurrency = 0, nice = 0
     await q.create_jobs([db.JobCreation(id, "foo", {}, "", initial_ruleset, status, concurrency, nice, tag, None, depth)])
     return id
 
-async def make_pages(q, job_id, *payloads, parent_page = None):
+async def make_pages(q, job_id, *payloads, parent_page = None, use_payload_as_id = False):
     pagecs = []
     ids = []
     for page in payloads:
-        id = db.generate_id()
+        id = db.generate_id() if not use_payload_as_id else db.parse_id(page)
         ids.append(id)
         pagecs.append(db.PageCreation(id, page, parent_page))
     pages = await q.create_pages(job_id, pagecs)
@@ -490,11 +490,94 @@ async def _assert_eligible_jobs(pipe: db.Pipeline, job_id: model.UUID, expected_
     assert discovered_i == expected_ineligible
 
 async def _get_page_depths(pipe, *page_ids):
+    if isinstance(pipe, db.Pipeline): pipe = pipe.parent
     depths = []
     for page_id in page_ids:
-        res = await pipe.parent.conn.execute(sqlalchemy.select(pipe.parent._page_depth(page_id)))
-        depths.append(res.first()[0])
+        res = await pipe.conn.execute(sqlalchemy.select(pipe._page_depth(page_id)))
+        depths.append(res.one()[0])
     return depths
+
+async def check_depths(q: db.Connection, id_to_depth: dict[str, int]):
+    print(id_to_depth)
+    res = await q.conn.execute(sqlalchemy.select(model.pages.c.page_id, q._page_depth(model.pages.c.page_id)))
+    for payload, depth in res:
+        payload = str(payload)
+        print(payload, depth, "expected =", id_to_depth[payload])
+        assert id_to_depth.pop(payload) == depth
+    assert id_to_depth == {}
+
+@_test
+async def test_depth_only_makes_improvements(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        conn = await conn.execution_options(isolation_level = "AUTOCOMMIT")
+        q = db.Connection(conn)
+        job1 = await make_job(q)
+
+        await make_pages(q, job1, "01a02231-9c4c-75a0-ac77-93cfb1a33307", "01a02231-9c4c-75a0-ac77-93d5b66241ea", use_payload_as_id = True)
+        await make_pages(q, job1, "01a02231-9c4c-75a0-ac77-94061d12f928", parent_page = "01a02231-9c4c-75a0-ac77-93cfb1a33307", use_payload_as_id = True)
+        await make_pages(q, job1, "01a02231-9c4c-75a0-ac77-93d5b66241ea", parent_page = "01a02231-9c4c-75a0-ac77-94061d12f928", use_payload_as_id = True)
+        await make_pages(q, job1, "01a02231-9c4c-75a0-ac77-94fcbd877bda", parent_page = "01a02231-9c4c-75a0-ac77-93d5b66241ea", use_payload_as_id = True)
+        await make_pages(q, job1, "01a02231-9c4c-75a0-ac77-95e160b5c3a2", parent_page = "01a02231-9c4c-75a0-ac77-94fcbd877bda", use_payload_as_id = True)
+        await make_pages(q, job1,  "01a02231-9c4c-75a0-ac77-93cfb1a33307", "01a02a9a-c1b8-77f8-ada2-0c07b2fea879", parent_page = "01a02231-9c4c-75a0-ac77-95e160b5c3a2", use_payload_as_id = True)
+
+        expected_depth = {
+                "01a02231-9c4c-75a0-ac77-93cfb1a33307": 0,
+                "01a02231-9c4c-75a0-ac77-93d5b66241ea": 0,
+                "01a02231-9c4c-75a0-ac77-94061d12f928": 1,
+                "01a02231-9c4c-75a0-ac77-94fcbd877bda": 1,
+                "01a02231-9c4c-75a0-ac77-95e160b5c3a2": 2,
+                "01a02a9a-c1b8-77f8-ada2-0c07b2fea879": 3,
+        }
+        await check_depths(q, expected_depth)
+
+        await make_pages(q, job1, "01a02231-9c4c-75a0-ac77-95e160b5c3a2", parent_page = "01a02231-9c4c-75a0-ac77-93cfb1a33307", use_payload_as_id = True)
+
+        expected_depth = {
+                "01a02231-9c4c-75a0-ac77-93cfb1a33307": 0,
+                "01a02231-9c4c-75a0-ac77-93d5b66241ea": 0,
+                "01a02231-9c4c-75a0-ac77-94061d12f928": 1,
+                "01a02231-9c4c-75a0-ac77-94fcbd877bda": 1,
+                "01a02231-9c4c-75a0-ac77-95e160b5c3a2": 1,
+                "01a02a9a-c1b8-77f8-ada2-0c07b2fea879": 2,
+        }
+        await check_depths(q, expected_depth)
+
+        with pytest.raises(AssertionError):
+            expected_depth = {
+                    "01a02231-9c4c-75a0-ac77-93cfb1a33307": 0,
+                    "01a02231-9c4c-75a0-ac77-93d5b66241ea": 0,
+                    "01a02231-9c4c-75a0-ac77-94061d12f928": 1,
+                    "01a02231-9c4c-75a0-ac77-94fcbd877bda": 1,
+                    "01a02231-9c4c-75a0-ac77-95e160b5c3a2": 1,
+                    "01a02a9a-c1b8-77f8-ada2-0c07b2fea879": 7,
+            }
+            await check_depths(q, expected_depth)
+
+@_test
+async def test_depth_sets_correct_number(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job1 = await make_job(q)
+
+        a, = await make_pages(q, job1, "a")
+        b, = await make_pages(q, job1, "b", parent_page = a)
+        c, = await make_pages(q, job1, "c", parent_page = b)
+        d, = await make_pages(q, job1, "d", parent_page = c)
+        e, = await make_pages(q, job1, "e", parent_page = d)
+        f, = await make_pages(q, job1, "f", parent_page = e)
+        g, = await make_pages(q, job1, "g", parent_page = e)
+
+        z, = await make_pages(q, job1, "z")
+        y, = await make_pages(q, job1, "y", parent_page = z)
+        x, = await make_pages(q, job1, "x", parent_page = y)
+        w, = await make_pages(q, job1, "w", parent_page = x)
+        f, = await make_pages(q, job1, "f", parent_page = w)
+
+        expected = {a: 0, b: 1, c: 2, d: 3, e: 4, f: 4, g: 5, z: 0, y: 1, x: 2, w: 3}
+        assert await _get_page_depths(q, *expected.keys()) == list(expected.values())
+        await make_pages(q, job1, "d", parent_page = z)
+        expected = {a: 0, b: 1, c: 2, d: 1, e: 2, f: 3, g: 3, z: 0, y: 1, x: 2, w: 3}
+        assert await _get_page_depths(q, *expected.keys()) == list(expected.values())
 
 @_test
 async def test_depth_tracking(engine: sqlalchemy.ext.asyncio.AsyncEngine):
@@ -547,6 +630,85 @@ async def test_depth_tracking(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         assert root1b == root1
         assert (await _get_page_depths(pipe, root1)) == [0]
         await _assert_eligible_jobs(pipe, job1, [root1, root2, page11, page21, page22, page23, page24], [])
+
+import random
+import queue
+def generate_page_tree(depth: int, max_depth: int, all_ids: set):
+    if depth > max_depth:
+        return {}
+    current = {}
+    for subpage in range(0, random.randint(0, 7)):
+        use_existing = random.randint(0, 1) == 1
+        if use_existing:
+            the_id = random.choice([key for key in all_ids if key not in current] or [str(db.generate_id())])
+        else:
+            the_id = str(db.generate_id())
+            assert the_id not in all_ids
+        all_ids.add(the_id)
+        current[the_id] = generate_page_tree(depth + 1, max_depth, all_ids)
+    return current
+
+async def tree_to_db(q: db.Connection, job_id: model.UUID, tree: dict[str, dict], parent: str | model.UUID | None = None):
+    print("tree_to_db", parent, list(tree.keys()))
+    if isinstance(parent, str): parent = db.parse_id(parent)
+    await q.create_pages(job_id, (db.PageCreation(db.parse_id(i), i, parent) for i in tree.keys()))
+    for loop_parent, loop_children in tree.items():
+        await tree_to_db(q, job_id, loop_children, loop_parent)
+
+def make_depth_tree(generated_tree: dict[str, dict]) -> dict[str, int]:
+    # Convert the tree into a dictionary of {parent: children}.
+    children = {}
+
+    def collect(tree):
+        for loop_parent, subtree in tree.items():
+            children.setdefault(loop_parent, set())
+            for child in subtree.keys():
+                children[loop_parent].add(child)
+            collect(subtree)
+    collect(generated_tree)
+
+    id_to_depth = {}
+
+    qu = queue.Queue()
+    for root in generated_tree.keys():
+        id_to_depth[root] = 0
+        qu.put(root)
+    while True:
+        try:
+            item = qu.get_nowait()
+            child_depth = id_to_depth[item] + 1
+        except queue.Empty:
+            return id_to_depth
+        for child in children[item]:
+            if child not in id_to_depth:
+                print("Smallest", child, "parent:", item)
+                id_to_depth[child] = child_depth
+                qu.put(child)
+            else:
+                assert id_to_depth[child] <= child_depth
+
+async def do_one_page_test(conn):
+    q = db.Connection(conn)
+    job_id = await make_job(q)
+    seed = random.randint(0, 2**62)
+    print("Using seed:", seed)
+    random.seed(seed)
+    all_ids = set()
+    tree = generate_page_tree(0, random.randint(1, 4), all_ids)
+    id_to_depth = make_depth_tree(tree)
+    print("\n\nTREE: ", tree)
+    print("\n\nIDTD: ", id_to_depth)
+    print("\n\n")
+    await tree_to_db(q, job_id, tree)
+    await check_depths(q, id_to_depth)
+
+    await conn.rollback()
+
+@_test
+async def test_random_page_trees(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        for i in range(15):
+            await do_one_page_test(conn)
 
 @_test
 async def test_attempt_id_to_job_id(engine: sqlalchemy.ext.asyncio.AsyncEngine):
