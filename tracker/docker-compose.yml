@@ -38,3 +38,11 @@ services:
     #ports:
     #  - 8898:8898
     network_mode: host
+  script:
+    build: .
+    entrypoint: "python3 -m tracker.scripts"
+    restart: no
+    init: true
+    network_mode: host
+    environment:
+      MNBOT_DATABASE_URI: ${MNBOT_DATABASE_URI}

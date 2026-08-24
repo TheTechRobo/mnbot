@@ -108,7 +108,7 @@ async def docs():
 async def translate_form_input():
     if "item" not in request.args:
         abort(400)
-    id = request.args['item']
+    id = request.args['item'].strip()
     try:
         id = db.parse_id(id)
     except db.InvalidIdError:
@@ -272,7 +272,7 @@ async def single_job(job_id, html):
     v['status'] = v['status'].name
     return {"status": 200, "job": v}
 
-async def pages_list(q, html, list_template, volatile = True, include_header = False, ugly_hack = None):
+async def pages_list(q, html, list_template, volatile = True, include_header = False, ugly_hack = None, include_item_search = False):
     page_size = 10
     try:
         offset = int(request.args.get("offset", 0))
@@ -298,7 +298,7 @@ async def pages_list(q, html, list_template, volatile = True, include_header = F
         new_args = {k: v for k, v in request.args.items() if k != "offset"}
         base_query = urllib.parse.urlencode(new_args, doseq = True)
         base_query = base_query + "&" if base_query else ""
-        return await render_template("list/" + list_template, rows = rows, offset = offset, next_offset = next_offset, prev_offset = prev_offset, volatile = volatile, include_header = include_header, ugly_hack = ugly_hack, base_query = base_query)
+        return await render_template("list/" + list_template, rows = rows, offset = offset, next_offset = next_offset, prev_offset = prev_offset, volatile = volatile, include_header = include_header, ugly_hack = ugly_hack, base_query = base_query, include_item_search = include_item_search)
     return {"status": 200, "rows": rows, "next": next_offset, "prev": prev_offset}
 
 pages_q = lambda job_id : (
@@ -343,8 +343,9 @@ async def search_url(html):
     q = (
         sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, sqlalchemy.func.uuid_extract_timestamp(model.pages.c.page_id).label("date"))
         .where(model.pages.c.payload_ssurt.startswith(ssurt))
+        .order_by(model.pages.c.payload_ssurt)
     )
-    return await pages_list(q, html, "pages_with_date.j2", volatile = False, include_header = True, ugly_hack = f"Using ssurt prefix {ssurt}")
+    return await pages_list(q, html, "pages_with_date.j2", volatile = False, include_header = True, ugly_hack = f"Using ssurt prefix {ssurt}", include_item_search = True)
 
 @route_with_json("/ruleset/<job_id>/<ruleset_id>/test")
 async def test_ruleset(job_id, ruleset_id, html):
