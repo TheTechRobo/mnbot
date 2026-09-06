@@ -89,6 +89,7 @@ def validate_depth(depth):
     except (ValueError, AssertionError):
         raise CustomMessageException("Invalid depth value! Please supply either an integer >= 0 or 'inf' for no limit.")
 
+@bot.add_argument("--tag", default = None)
 @bot.add_argument("--accept", default = None)
 @bot.add_argument("--depth", default = "0")
 @bot.add_argument("--concurrency", "-c", type = int, default = 1)
@@ -147,6 +148,7 @@ async def brozzle(self: Bot, user: User, ran, args):
         note = args.explanation,
         initial_ruleset = initial_ruleset,
         depth = depth,
+        tag = args.tag,
     )
 
     async with ENGINE.connect() as conn:
@@ -417,7 +419,19 @@ async def tag(self: Bot, user: User, ran, command: str, pipeline_id: str, tag = 
                 message = f"Pipeline {pipeline_id} has no tags."
             yield message
         elif not tag:
-            yield "A tag must be provided."
+            if command in ("add", "remove"):
+                yield "A tag must be provided."
+                return
+            job_id, tag = db.parse_id(command), pipeline_id
+            if tag == "": tag = None
+            q = sqlalchemy.update(model.jobs).where(model.jobs.c.job_id == job_id).values(tag = tag)
+            res = await conn.execute(q)
+            if res.rowcount == 0:
+                yield f"Job {job_id} does not exist."
+                return
+            assert res.rowcount == 1
+            await conn.commit()
+            yield f"Successfully changed tag of {job_id} to {tag}."
             return
         else:
             if "@" not in user.modes:

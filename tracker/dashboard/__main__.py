@@ -452,7 +452,7 @@ async def pipelines(html):
     async with ENGINE.connect() as conn:
         conn = await conn.execution_options(postgresql_readonly = True)
         queue = db.Connection(conn)
-        pipelines = await queue.get_pipelines()
+        pipelines = await queue.get_pipelines(tag = request.args.get("tag"))
         res = []
         for pipeline in pipelines:
             if health := pipeline.pipeline_health:

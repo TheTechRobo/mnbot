@@ -1028,6 +1028,23 @@ async def test_pipeline_heartbeat(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         assert await q.get_pipeline_health_status(gb(0), datetime.timedelta(seconds = 60)) == db.PipelineHealthStatus.HEALTHY
 
 @_test
+async def test_get_pipelines(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe1", False, "password")
+        await q.create_pipeline("pipe2", False, "password")
+        pipe1 = await q.pipeline("pipe1")
+        pipe2 = await q.pipeline("pipe2")
+        await pipe1.create_tags("tag1")
+
+        assert {i.pipeline_id for i in await q.get_pipelines()} == {"pipe1", "pipe2"}
+        assert {i.pipeline_id for i in await q.get_pipelines("pipe1", "pipe2")} == {"pipe1", "pipe2"}
+        assert {i.pipeline_id for i in await q.get_pipelines("pipe1")} == {"pipe1"}
+        assert {i.pipeline_id for i in await q.get_pipelines("pipe1", "pipe2", tag = "tag1")} == {"pipe1"}
+        assert {i.pipeline_id for i in await q.get_pipelines(tag = "tag1")} == {"pipe1"}
+        assert {i.pipeline_id for i in await q.get_pipelines("pipe2", tag = "tag1")} == set()
+
+@_test
 async def test_multiple_create_page_same_payload(engine: sqlalchemy.ext.asyncio.AsyncEngine):
     async with engine.connect() as conn:
         q = db.Connection(conn)

@@ -704,13 +704,19 @@ class Connection:
     MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
     MAX_HEARTBEAT_AGE = datetime.timedelta(seconds = 120)
 
-    async def get_pipelines(self, *pipeline_ids) -> list[PipelineInfo]:
+    async def get_pipelines(self, *pipeline_ids, tag: str | None = None) -> list[PipelineInfo]:
         """
         If no pipelines are specified, all pipelines are returned.
         """
         q = sqlalchemy.select(model.pipelines)
         if pipeline_ids:
             q = q.where(model.pipelines.c.pipeline_id.in_(pipeline_ids))
+        if tag:
+            q = q.where(sqlalchemy.exists(
+                sqlalchemy.select(model.tags)
+                .where(model.tags.c.pipeline_id == model.pipelines.c.pipeline_id)
+                .where(model.tags.c.tag == tag)
+            ))
         res = await self.conn.execute(q)
         pipelines = []
         for row in res:
