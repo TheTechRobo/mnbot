@@ -208,7 +208,7 @@ async def single_page(page_id, html):
                 pipeline_id = row.pipeline_id,
                 pipeline_version = row.pipeline_version,
                 error = row.error,
-                finished = row.finished,
+                finished = bool(row.finished_at),
                 ruleset = ruleset,
                 applied_settings = applied_settings,
                 results = results,
@@ -401,6 +401,19 @@ async def get_requisites(page_id):
 @app.route("/page/<id>/outlinks")
 async def outlinks(id):
     return get_outlinks(id), {"content-type": "application/json"}
+
+@route_with_json("/job/<id>/recent")
+async def job_recent(id, html):
+    max_finished = int(request.args.get("max_finished", 3))
+    max_pending = int(request.args.get("max_pending", 3))
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        queue = db.Connection(conn)
+        recent, claimed, pending = await queue.get_recent_activity(id, max_finished, max_pending)
+        todelta = lambda v : datetime.datetime.now(datetime.UTC) - v
+    if html:
+        return await render_template("activity.j2", job_id = "b", recently_completed = recent, claimed = claimed, pending = pending, todelta = todelta, maxes = (max_finished, max_pending))
+    return {"status": 200, "recent": recent, "claimed": claimed, "pending": pending}
 
 async def get_outlinks(page_id):
     yield "["

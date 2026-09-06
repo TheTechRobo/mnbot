@@ -19,19 +19,7 @@
 				<tr>
 					{% if last %}
 						<td>{{ pipeline }}</td>
-						<td {% if not last.healthy %} class="error" {% endif %}>
-							{% if last.days > 0 %}
-								<span class="error">over {{ last.days }} day{% if last.days != 1 %}s{% endif %} ago</span>
-							{% elif last.seconds < 60 %}
-								less than a minute ago
-							{% elif last.seconds < 3600 %}
-								{% set i = (last.seconds / 60)|round|int %}
-								about {{ i }} minute{% if i != 1 %}s{% endif %} ago
-							{% else %}
-								{% set i = (last.seconds / 60 / 60)|round|int %}
-								about {{ i }} hour{% if i != 1 %}s{% endif %} ago
-							{% endif %}
-						</td>
+						<td {% if not last.healthy %} class="error" {% endif %}>{{ macros.ago(last) }}</td>
 						<td {% if not disk[2] %} class="error" {% endif %}>{{ disk[0] }} GiB free of {{ disk[1] }} GiB</td>
 						<td>{{ matchonly }}</td>
 					{% else %}

@@ -20,8 +20,8 @@
 		<li><b>Created at: </b>{{ timestamp }}</li>
 		<li><b>Max depth: </b>{{ job.depth }}</li>
 		<li><b>Max concurrency: </b>{{ job.concurrency }} ({{ job.active_claims|length }} active claims)</li>
-		{% if job.explanation %}
-			<li><b>Explanation: </b>{{ job.explanation }}</li>
+		{% if job.note %}
+			<li><b>Explanation: </b>{{ job.note }}</li>
 		{% endif %}
 		{% if job.tag %}
 			<li>
@@ -72,20 +72,10 @@
 
 <section id="pages">
 	<h3><span class="shortcut">P</span>ages</h3>
-	{% if status != "DONE" %}
-		<section id="claimed">
-			<h4>Claimed Pages</h4>
-			<iframe src="{{ url_for('job_claimed', job_id = job.id) }}" style="width: 100%" height=400>
-				Your browser does not support iframes.
-			</iframe>
-		</section>
-		<section id="pending">
-			<h4>Pending Pages</h4>
-			<iframe src="{{ url_for('job_pending', job_id = job.id) }}" style="width: 100%" height=400>
-				Your browser does not support iframes.
-			</iframe>
-		</section>
-	{% endif %}
+	<h4>Recent activity</h4>
+	<iframe src="{{ url_for('job_recent', id = job.id) }}" style="width: 100%" height=400>
+		Your browser does not support iframes.
+	</iframe>
 	<section id="all">
 		<h4>All Pages</h4>
 		<a href="{{ url_for('job_pages', job_id = job.id) }}">List all pages</a> (in order of creation)

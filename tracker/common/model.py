@@ -224,9 +224,11 @@ attempts = Table(
     Column("pipeline_version", sqlalchemy.Text),
     Column("pipeline_slot", sqlalchemy.SmallInteger),
     Column("error", sqlalchemy.Text, nullable = True, default = None),
-    Column("finished", sqlalchemy.Boolean, default = False),
+    Column("finished_at", sqlalchemy.TIMESTAMP(timezone = True), nullable = True),
     Column("ruleset_id", sqlalchemy.Uuid),
+    Column("job_id", sqlalchemy.Uuid, ForeignKey("jobs.job_id")),
 
+    Index("attempts_index_by_job", "job_id", sqlalchemy.column("finished_at").nulls_first()),
     # TODO: Does attempt_id need to be explicitly stated here?
     Index("attempts_index_by_page", "page_id", "attempt_id"),
 )

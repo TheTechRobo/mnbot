@@ -5,6 +5,7 @@ The functions in this file that take a connection parameter do not automatically
 Transaction management is left to the caller.
 """
 
+import collections
 import datetime
 import dataclasses
 import enum
@@ -660,6 +661,46 @@ class Connection:
                 settings = PageSettings.from_ruleset(payload, ruleset)
                 yield PendingPage(page_id, payload, ruleset.job_ruleset_id, settings)
 
+    ActivityRecentAttempt = collections.namedtuple("ActivityRecentAttempt", ("page_id", "payload", "finished_at", "error"))
+    ActivityPage = collections.namedtuple("ActivityClaimedPage", ("page_id", "payload"))
+    async def get_recent_activity(self, job_id: model.UUID, max_finished_pages: int, max_pending_pages: int) -> tuple[list[ActivityRecentAttempt], list[ActivityPage], list[ActivityPage]]:
+        """
+        Gets the recent activity for a particular job.
+        Firstly, up to max_finished_pages completed pages will be retrieved (in order of most recently completed). (There may be duplicates if it was finished multiple times.)
+        Then, all claimed pages will be retrieved (in dequeue order).
+        Finally, up to max_pending_pages pending pages will be retrieved (in dequeue order).
+        """
+        finished_pages = []
+        if max_finished_pages > 0:
+            q1 = (
+                sqlalchemy.select(model.attempts.c.page_id, model.pages.c.payload, model.attempts.c.finished_at, model.attempts.c.error)
+                .select_from(model.attempts)
+                .where(model.attempts.c.job_id == job_id)
+                .where(model.attempts.c.finished_at != None)
+                .join(model.pages, model.pages.c.page_id == model.attempts.c.page_id)
+                .order_by(model.attempts.c.finished_at.desc())
+                .limit(max_finished_pages)
+            )
+            results = await self.conn.execute(q1)
+            finished_pages = [self.ActivityRecentAttempt(row.page_id, row.payload, row.finished_at, row.error) for row in reversed(results.all())]
+
+        q2 = (
+            sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload)
+            .where(model.pages.c.job_id == job_id)
+            .where(model.pages.c.status == model.PageStatus.CLAIMED)
+            .order_by(*model.pages_dequeue_order)
+        )
+        results = await self.conn.execute(q2)
+        claimed_pages = [self.ActivityPage(row.page_id, row.payload) for row in results]
+
+        pending_pages = []
+        if max_pending_pages > 0:
+            q3 = self._all_pending_pages_q(job_id).limit(max_pending_pages)
+            results = await self.conn.execute(q3)
+            pending_pages = [self.ActivityPage(row.page_id, row.payload) for row in results]
+
+        return finished_pages, claimed_pages, pending_pages
+
     MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
     MAX_HEARTBEAT_AGE = datetime.timedelta(seconds = 120)
 
@@ -797,7 +838,7 @@ class Pipeline:
         Creates an attempt for a page, returning its ID.
         """
         ident = uuid.uuid7()
-        q = sqlalchemy.insert(model.attempts)
+        q = sqlalchemy.insert(model.attempts).values(job_id = sqlalchemy.select(model.pages.c.job_id).where(model.pages.c.page_id == page).scalar_subquery())
         val = dict(
             attempt_id = ident,
             page_id = page,
@@ -942,7 +983,7 @@ class Pipeline:
         q = (
             sqlalchemy.update(model.attempts)
             .where(model.attempts.c.attempt_id == attempt_id)
-            .values(finished = True, error = error)
+            .values(finished_at = datetime.datetime.now(datetime.UTC), error = error)
             .returning(model.attempts.c.page_id, model.attempts.c.pipeline_slot)
         )
         res = await self.conn.execute(q)

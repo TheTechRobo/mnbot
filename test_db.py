@@ -1067,6 +1067,51 @@ async def test_active_claims_decremented(engine: sqlalchemy.ext.asyncio.AsyncEng
         res = await conn.execute(query)
         assert res.one()[0] == 0
 
+@_test
+async def test_recent_activity(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    async with engine.connect() as conn:
+        map_to_payload = lambda v : [[j.payload for j in i] for i in v]
+        q = db.Connection(conn)
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0, 1)
+        job1 = await make_job(q, concurrency = 2)
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 2, 2))
+        assert recent == [] and claim == [] and pending == []
+
+        await make_pages(q, job1, "a", "b", "c", "d")
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 2, 2))
+        assert recent == [] and claim == [] and pending == ["a", "b"]
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 0, 1000))
+        assert recent == [] and claim == [] and pending == ["a", "b", "c", "d"]
+        claima = await pipe.find_claim_page("", 0)
+        assert claima and claima.payload == "a"
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 2, 2))
+        assert recent == [] and claim == ["a"] and pending == ["b", "c"]
+        claimb = await pipe.find_claim_page("", 0)
+        claimc = await pipe.find_claim_page("", 0)
+        assert claimb and claimc and claimb.payload == "b" and claimc.payload == "c"
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 2, 2))
+        assert recent == [] and claim == ["a", "b", "c"] and pending == ["d"]
+        await pipe.finish_attempt(claimb.attempt_id)
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 2, 2))
+        assert recent == ["b"] and claim == ["a", "c"] and pending == ["d"]
+        await pipe.fail_attempt(claima.attempt_id, "error", False)
+        await pipe.finish_attempt(claimc.attempt_id)
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 10, 2))
+        assert recent == ["b", "a", "c"] and claim == [] and pending == ["d", "a"]
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 2, 2))
+        assert recent == ["a", "c"] and claim == [] and pending == ["d", "a"]
+        await pipe.find_claim_page("", 0)
+        claima2 = await pipe.find_claim_page("", 0)
+        assert claima2 and claima2.payload == "a"
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 2, 2))
+        assert recent == ["a", "c"] and claim == ["d", "a"] and pending == []
+        await pipe.fail_attempt(claima2.attempt_id, "error2", True)
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 3, 2))
+        assert recent == ["a", "c", "a"] and claim == ["d"] and pending == []
+        recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 2, 2))
+        assert recent == ["c", "a"] and claim == ["d"] and pending == []
+
 @db._wrap_serialization_failure
 async def _commit(conn):
     await conn.commit()
