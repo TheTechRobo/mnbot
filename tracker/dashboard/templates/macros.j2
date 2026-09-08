@@ -83,7 +83,7 @@
 
 {% macro ago(last) %}
 	{% if last.days > 0 %}
-		<span class="error">over {{ last.days }} day{% if last.days != 1 %}s{% endif %} ago</span>
+		over {{ last.days }} day{% if last.days != 1 %}s{% endif %} ago
 	{% elif last.seconds < 60 %}
 		less than a minute ago
 	{% elif last.seconds < 3600 %}

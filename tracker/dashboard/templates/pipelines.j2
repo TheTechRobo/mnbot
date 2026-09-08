@@ -19,7 +19,7 @@
 				<tr>
 					{% if last %}
 						<td>{{ pipeline }}</td>
-						<td {% if not last.healthy %} class="error" {% endif %}>{{ macros.ago(last) }}</td>
+						<td {% if last.days > 0 or not last.healthy %} class="error" {% endif %}>{{ macros.ago(last) }}</td>
 						<td {% if not disk[2] %} class="error" {% endif %}>{{ disk[0] }} GiB free of {{ disk[1] }} GiB</td>
 						<td>{{ matchonly }}</td>
 					{% else %}
