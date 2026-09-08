@@ -1,0 +1,55 @@
+{% extends "skeleton.j2" %}
+
+{% block title %} Search results {% endblock %}
+
+{% block override_header %} {% if include_header %} {{ super() }} {% endif %} {% endblock %}
+
+{% block content %}
+
+<style>
+nav {
+	vertical-align: center;
+}
+</style>
+
+{% if ugly_hack %} <p>{{ ugly_hack|e }}</p> {% endif %}
+
+<header>
+	<div>
+		<a role="button" class="secondary" href="">Reload</a>
+	</div>
+	<nav>
+		<ul>
+			<li><em{% if volatile %} data-tooltip="Order may change as the job is run." data-placement="left" {% endif %}>
+					{% if not offset and not rows %} No matches were found.
+					{% else %} Showing rows {{ offset + 1 }} to {{ offset + len(rows) }}
+					{% endif %}
+			</em></li>
+			{% if not prev_offset is none %}
+				<li><a role="button" href="?{{ base_query }}offset={{ prev_offset }}">Prev</a></li>
+			{% endif %}
+			{% if not next_offset is none %}
+				<li><a role="button" href="?{{ base_query }}offset={{ next_offset }}">Next</a></li>
+			{% endif %}
+		</ul>
+	</nav>
+</header>
+
+<section id="pages">
+	{% for row in rows %}
+		<a class="link-box" href="{% block loop_href scoped required %} {% endblock %}" target="_top">
+			<div role="button" class="outline contrast link-box-inner">
+				<b>{% block loop_payload scoped required %} {% endblock %}</b>
+				<br />
+				<small>{% block loop_footer scoped required %} {% endblock %}</small>
+			</div>
+		</a>
+	{% endfor %}
+	{% if not offset and not rows %}
+		<p>There aren't any pages that match this query.</p>
+	{% endif %}
+</section>
+
+{% if include_item_search %} {% include 'components/item-search.j2' %} {% endif %}
+
+{% endblock %}

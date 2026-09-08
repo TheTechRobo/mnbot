@@ -1,4 +1,4 @@
-.active {
+.active, .low-importance, nav .current {
 	color: grey;
 }
 
@@ -20,8 +20,9 @@ hgroup a {
 	text-decoration: none;
 }
 
-nav .current {
-	color: grey;
+/* Prevent there from being too much space above the breadcrumb */
+main nav[aria-label="breadcrumb"] li {
+	padding-top: 0 !important;
 }
 
 a code {
@@ -49,5 +50,32 @@ section:focus-visible > :first-child {
 }
 
 .thumb {
-	max-width: 60%;
+	max-width: 40%;
+}
+
+/* These are basically Pico's accordion styles but adapted so they are usable wherever. */
+.link-box {
+	display: block;
+	margin-bottom: var(--pico-spacing);
+	width: 100%;
+	text-decoration: none;
+}
+
+.link-box-inner {
+	width: 100%;
+	text-align: left;
+}
+
+.link-box-inner::after {
+	display: block;
+	width: 1rem;
+	height: calc(1rem * var(--pico-line-height,1.5));
+	float: right;
+	transform: rotate(-90deg);
+	background-image: var(--pico-icon-chevron);
+	background-position: right center;
+	background-size: 1rem auto;
+	background-repeat: no-repeat;
+	content: "";
+	transition: transform var(--pico-transition);
 }
