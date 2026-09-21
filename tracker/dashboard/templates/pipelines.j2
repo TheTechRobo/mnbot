@@ -1,0 +1,38 @@
+{% extends "skeleton.j2" %}
+
+{% block title %} Active pipelines {% endblock %}
+
+{% block content %}
+
+<h2>Pipelines</h2>
+
+<section id="item-list">
+	<div class="overflow-auto">
+		<table>
+			<tr>
+				<th>Pipeline</th>
+				<th>Last heartbeat</th>
+				<th>Disk space</th>
+				<th>Matchonly</th>
+			</tr>
+			{% for pipeline, last, disk, matchonly in pipelines %}
+				<tr>
+					{% if last %}
+						<td>{{ pipeline }}</td>
+						<td {% if last.days > 0 or not last.healthy %} class="error" {% endif %}>{{ macros.ago(last) }}</td>
+						<td {% if not disk[2] %} class="error" {% endif %}>{{ disk[0] }} GiB free of {{ disk[1] }} GiB</td>
+						<td>{{ matchonly }}</td>
+					{% else %}
+						<td>{{ pipeline }}</td>
+						<td>None</td>
+						<td>Unknown</td>
+						<td>{{ matchonly }}</td>
+					{% endif %}
+				</tr>
+			{% endfor %}
+		</table>
+	</div>
+	<p>(Live update is not implemented. Refresh the page for current statistics.)</p>
+</section>
+
+{% endblock %}

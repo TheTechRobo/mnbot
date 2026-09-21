@@ -1,0 +1,96 @@
+{% macro build_ua(ua) %}
+	{% if ua == "default" %} <span data-tooltip="Pretends to be Chrome on Windows, and adds information about mnbot.">Default</span>
+	{% elif ua == "stealth" %} <span data-tooltip="Pretends to be Chrome on Windows, without mnbot.">Stealth</span>
+	{% elif ua == "minimal" %} <span data-tooltip="Includes only information about mnbot.">Minimal</span>
+	{% elif ua == "googlebot" %} <span data-tooltip="Pretends to be Googlebot Desktop.">Googlebot Desktop</span>
+	{% elif ua.startswith("$") %} <code>{{ ua[1:] }}</code>
+	{% endif %}
+{% endmacro %}
+
+{% macro build_settings(settings, include_accept) %}
+	<ul>
+		<li><b>User agent: </b>{{ build_ua(settings.ua) }}</li>
+		{% if settings.custom_js %}
+			<li>
+				<details style="display: block; margin:0">
+					<summary><b>Custom JavaScript: </b>Click to show</summary>
+					<pre>{{ settings.custom_js }}</pre>
+				</details>
+			</li>
+		{% else %}
+			<li><b>Custom JavaScript: </b>None</li>
+		{% endif %}
+		{% if include_accept %}
+			{% if settings.skip %}
+				<li><b data-tooltip="Instead of dequeuing this page, its status will be changed to SKIPPED.">Skip this page</b></li>
+			{% else %}
+				<li>Do not skip this page</li>
+			{% endif %}
+			<li><span data-tooltip="NB: This has no effect for pages already in the queue.">
+				{% if settings.accept %}
+					Accept this URL into the queue
+				{% else %}
+					Reject this URL from the queue
+				{% endif %}
+			</span></li>
+		{% endif %}
+	</ul>
+{% endmacro %}
+
+{% macro build_rule_value(type, val) %}
+	{% if type == "ua" %} {{ build_ua(val) }}
+	{% elif type == "skip" or type == "accept" %} {{ val }}
+	{% elif type == "custom_js" %}
+		{% if val is none %} None
+		{% else %} <details><summary>Click to show</summary><pre>{{ val }}</pre></details>
+		{% endif %}
+	{% else %} Unreachable code! {{ val }} {% endif %}
+{% endmacro %}
+
+{% macro build_rules(type, col) %}
+	{% if col.rules %}
+		<details>
+			<summary>Varies (click to show)</summary>
+			<ul>
+				<li>
+					<b>Default (all pages): </b>{{ build_rule_value(type, col.default) }}
+				</li>
+				{% for rule in col.rules %}
+					<li><b>URLs matching <code>{{ rule.scope }}</code></b> (index {{ loop.index0 }}): {{ build_rule_value(type, rule.payload) }}</li>
+				{% endfor %}
+			</ul>
+		</details>
+	{% else %}
+		{{ build_rule_value(type, col.default) }}
+	{% endif %}
+{% endmacro %}
+
+{% macro page_status(status, attempts_remaining) %}
+	{% if status == "DRAINING" %}
+		<span data-tooltip="The queue is empty, but some in-progress pages remain.">
+			DRAINING
+		</span>
+	{% elif status == "READY" %}
+		{% if not attempts_remaining %}
+			COMPLETED
+		{% else %}
+			TODO
+		{% endif %}
+	{% else %}
+		{{ status }}
+	{% endif %}
+{% endmacro %}
+
+{% macro ago(last) %}
+	{% if last.days > 0 %}
+		over {{ last.days }} day{% if last.days != 1 %}s{% endif %} ago
+	{% elif last.seconds < 60 %}
+		less than a minute ago
+	{% elif last.seconds < 3600 %}
+		{% set i = (last.seconds / 60)|round|int %}
+		about {{ i }} minute{% if i != 1 %}s{% endif %} ago
+	{% else %}
+		{% set i = (last.seconds / 60 / 60)|round|int %}
+		about {{ i }} hour{% if i != 1 %}s{% endif %} ago
+	{% endif %}
+{% endmacro %}

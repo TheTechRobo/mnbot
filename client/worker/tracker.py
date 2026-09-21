@@ -1,15 +1,13 @@
-### HEY YOU! Yeah, you!
-### If you are making any change to the client, please
-### update the version in meta.py.
-### No two versions in prod should have the same version number.
-
 ############################# NOTE! ###############################
 ### If you are making any change to the client, please          ###
 ### update the version in shared.py.                            ###
 ### No two versions in prod should have the same version number.###
 ############################ THANKS! ##############################
 
-import asyncio, logging, json
+import asyncio
+import json
+import shutil
+import logging
 import typing
 
 from shared import VERSION
@@ -19,6 +17,14 @@ del logging
 
 import websockets
 from websockets.asyncio.client import connect
+import uuid_utils.compat as uuid
+
+class CustomEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, uuid.UUID):
+            return str(obj)
+        return super().default(obj)
+encoder = CustomEncoder()
 
 class Websocket:
     def __init__(self, url: str, advisory_handler):
@@ -32,13 +38,14 @@ class Websocket:
         async with self.lock:
             if not self.conn:
                 logger.debug("creating connection")
-                self.conn = await connect(self.url)
-                await self.conn.send(json.dumps({"v": VERSION}))
+                conn = await connect(self.url)
+                await conn.send(encoder.encode({"v": VERSION, "p": 2, "num_slots": 1}))
+                self.conn = conn
             self.seq += 1
             seq = self.seq
             message = {"type": type, "request": payload, "seq": seq}
-            logger.debug(f"sending message (keys: {list(message.keys())})")
-            await self.conn.send(json.dumps(message))
+            logger.debug(f"sending {type} message (seq = {seq})")
+            await self.conn.send(encoder.encode(message))
             while True:
                 resp = json.loads(await self.conn.recv())
                 if resp['seq'] is None: # Advisory
@@ -79,46 +86,46 @@ class Websocket:
                 await asyncio.sleep(sleep)
                 tries += 1
 
-    async def claim_item(self) -> typing.Optional[tuple[dict, str]]:
-        status, resp = await self._send("Item:claim", {"pipeline_type": "brozzler"})
+    async def claim_item(self, slot: int) -> typing.Optional[tuple[dict, str]]:
+        status, resp = await self._send("Item:claim", {"slot": slot})
         if status != 200:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
         if resp['item']:
             return resp['item'], resp['info_url']
         return None
 
-    async def fail_item(self, id: str, reason: str, tries: int, fatal: bool):
+    async def fail_item(self, attempt_id: str, reason: str, fatal: bool):
         status, resp = await self._send(
             "Item:fail",
             {
-                "id": id,
+                "attempt_id": attempt_id,
                 "message": reason,
-                "attempt": tries,
-                "fatal": fatal
+                "fatal": fatal,
             }
         )
         if status != 204:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
 
-    async def finish_item(self, id: str):
-        status, resp = await self._send("Item:finish", {"id": id})
+    async def finish_item(self, attempt_id: str):
+        status, resp = await self._send("Item:finish", {"attempt_id": attempt_id})
         if status != 204:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
 
-    async def store_result(self, id: str, result_type: str, tries: int, result, decode_fields = None):
+    async def store_result(self, attempt_id: str, result_type: str, result):
+        result_id = uuid.uuid7()
         pl = {
-            "result_type": result_type,
-            "attempt": tries,
-            "result": result,
-            "id": id
+            "result_id": result_id,
+            "attempt_id": attempt_id,
+            "type": result_type,
+            "payload": result,
         }
-        if decode_fields:
-            pl['decode_fields'] = decode_fields
         status, resp = await self._send("Item:store", pl)
         if status != 201:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
 
     async def ping(self):
-        status, resp = await self._send("System:ping")
+        space = shutil.disk_usage("/")
+        payload = dict(free = space.free, used = space.used, total = space.total)
+        status, resp = await self._send("System:ping", {"disk": payload})
         if status != 200:
             raise RuntimeError(f"Bad response from server: {status} {resp}")
