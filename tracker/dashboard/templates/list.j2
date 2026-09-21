@@ -19,19 +19,22 @@ nav {
 		<a role="button" class="secondary" href="">Reload</a>
 	</div>
 	<nav>
-		<ul>
-			<li><em{% if volatile %} data-tooltip="Order may change as the job is run." data-placement="left" {% endif %}>
-					{% if not offset and not rows %} No matches were found.
-					{% else %} Showing rows {{ offset + 1 }} to {{ offset + len(rows) }}
-					{% endif %}
-			</em></li>
-			{% if not prev_offset is none %}
-				<li><a role="button" href="?{{ base_query }}offset={{ prev_offset }}">Prev</a></li>
-			{% endif %}
-			{% if not next_offset is none %}
-				<li><a role="button" href="?{{ base_query }}offset={{ next_offset }}">Next</a></li>
-			{% endif %}
-		</ul>
+		{% set navigation %}
+			<ul>
+				{% if not prev_offset is none %}
+					<li><a role="button" href="?{{ base_query }}offset={{ prev_offset }}">Prev</a></li>
+				{% endif %}
+				<li><em{% if volatile %} data-tooltip="Order may change as the job is run." data-placement="left" {% endif %}>
+						{% if not offset and not rows %} No matches were found.
+						{% else %} Showing rows {{ offset + 1 }} to {{ offset + len(rows) }}
+						{% endif %}
+				</em></li>
+				{% if not next_offset is none %}
+					<li><a role="button" href="?{{ base_query }}offset={{ next_offset }}">Next</a></li>
+				{% endif %}
+			</ul>
+		{% endset %}
+		{{ navigation }}
 	</nav>
 </header>
 
@@ -49,6 +52,12 @@ nav {
 		<p>There aren't any pages that match this query.</p>
 	{% endif %}
 </section>
+
+<footer>
+	<nav>
+		{{ navigation }}
+	</nav>
+</footer>
 
 {% if include_item_search %} {% include 'components/item-search.j2' %} {% endif %}
 

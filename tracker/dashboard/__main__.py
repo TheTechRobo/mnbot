@@ -1,4 +1,5 @@
 from quart import Quart, abort, redirect, render_template, render_template_string, request, url_for
+import enum
 import werkzeug.exceptions
 import os
 import base64
@@ -9,6 +10,7 @@ import json
 import urlcanon
 
 import sqlalchemy, sqlalchemy.ext.asyncio, sqlalchemy.dialects.postgresql
+from quart.json.provider import DefaultJSONProvider
 
 from ..common import db, model
 
@@ -16,7 +18,15 @@ class EscapingQuart(Quart):
     def select_jinja_autoescape(self, filename: str) -> bool:
         return (not filename) or filename.endswith(".j2") or super().select_jinja_autoescape(filename)
 
+class CustomJSONEncoder(DefaultJSONProvider):
+    @staticmethod
+    def default(object_):
+        if isinstance(object_, enum.Enum):
+            return object_.name
+        return super(CustomJSONEncoder, CustomJSONEncoder).default(object_)
+
 app = EscapingQuart(__name__)
+app.json = CustomJSONEncoder(app)
 app.jinja_env.globals.update(isinstance = isinstance)
 
 DOCUMENTATION_URL = os.getenv("DOCUMENTATION_URL")
@@ -165,6 +175,7 @@ async def single_page(page_id, html):
         .select_from(model.attempts)
         .join(model.job_rulesets, model.attempts.c.ruleset_id == model.job_rulesets.c.job_ruleset_id)
         .where(model.attempts.c.page_id == page_id)
+        .order_by(model.attempts.c.attempt_id.asc())
     )
 
     async with ENGINE.connect() as conn:
@@ -412,7 +423,7 @@ async def job_recent(id, html):
         recent, claimed, pending = await queue.get_recent_activity(id, max_finished, max_pending)
         todelta = lambda v : datetime.datetime.now(datetime.UTC) - v
     if html:
-        return await render_template("activity.j2", job_id = "b", recently_completed = recent, claimed = claimed, pending = pending, todelta = todelta, maxes = (max_finished, max_pending))
+        return await render_template("activity.j2", job_id = id, recently_completed = recent, claimed = claimed, pending = pending, todelta = todelta, maxes = (max_finished, max_pending))
     return {"status": 200, "recent": recent, "claimed": claimed, "pending": pending}
 
 async def get_outlinks(page_id):

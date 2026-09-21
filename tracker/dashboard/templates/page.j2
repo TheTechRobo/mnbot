@@ -1,6 +1,6 @@
 {% extends "skeleton.j2" %}
 
-{% block title %} Page {{ page.id }} ({{ page.url }}) {% endblock %}
+{% block title %} Page {{ page.id }} {{ page.url }} {% endblock %}
 
 {% block content %}
 {% set status = page.status.name %}
@@ -32,7 +32,7 @@
 					<span {% if attempt.error %} class="error" {% endif %}>
 						Attempt {{ attempt.id }}
 					</span>
-					(on pipeline {{ attempt.pipeline }} {{ attempt.pipeline_version }})
+					(on pipeline {{ attempt.pipeline_id }} {{ attempt.pipeline_version }})
 				</b>
 			</p>
 			<ul>
@@ -88,7 +88,17 @@
 							<summary>
 								<b>Custom JS result: </b>
 							</summary>
-							<pre>{{ attempt.results.custom_js_result }}</pre>
+							{% if attempt.results.custom_js_result.status == "success" %}
+								<span style="color: green">Success!</span>
+								Remote object: <code>{{ attempt.results.custom_js_result.remoteObject }}</code>
+							{% elif attempt.results.custom_js_result.status == "exception" %}
+								<span style="color: red">
+									{{ attempt.results.custom_js_result.exceptionDetails.text }} {{ attempt.results.custom_js_result.exceptionDetails.exception.description }}
+									on line {{ attempt.results.custom_js_result.exceptionDetails.lineNumber }}
+								</span>
+							{% else %}
+								Failed to parse response: <pre>{{ attempt.results.custom_js_result }}</pre>
+							{% endif %}
 						</details>
 					</li>
 				{% endif %}
