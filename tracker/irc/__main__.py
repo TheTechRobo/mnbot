@@ -89,6 +89,7 @@ def validate_depth(depth):
     except (ValueError, AssertionError):
         raise CustomMessageException("Invalid depth value! Please supply either an integer >= 0 or 'inf' for no limit.")
 
+@bot.add_argument("--for", "--cc", dest = "cc", action = "append")
 @bot.add_argument("--tag", default = None)
 @bot.add_argument("--accept", default = None)
 @bot.add_argument("--depth", default = "0")
@@ -101,7 +102,7 @@ def validate_depth(depth):
 @bot.add_argument("--explanation", "--explain", "-e")
 @bot.add_argument("--custom-js")
 @bot.add_argument("--skip-url-validation", action = "store_true")
-@bot.add_argument("--nice", "-n", type = int, default = 0)
+@bot.add_argument("--nice", "-n", type = int, default = None)
 @bot.add_argument("url")
 @bot.add_argument("redirector", nargs = "?", metavar = "<")
 @bot.argparse("!brozzle")
@@ -109,7 +110,10 @@ def validate_depth(depth):
 async def brozzle(self: Bot, user: User, ran, args):
     depth = validate_depth(args.depth)
     metadata = {}
-    if args.nice < -10:
+    is_bulk = (args.redirector == "<")
+    if args.nice is None:
+        args.nice = 10 if is_bulk else 0
+    elif args.nice < -10:
         if "@" not in user.modes:
             yield "Sorry, but only operators can queue with a niceness lower than -10."
             return
@@ -137,10 +141,14 @@ async def brozzle(self: Bot, user: User, ran, args):
         db.regex.compile(args.accept)
         initial_ruleset.accept.rules.append(db.JobRule(args.accept, True))
 
+    created_by = user.nick
+    if args.cc:
+        created_by += ", " + ", ".join(args.cc)
+
     job_id = db.generate_id()
     job = db.JobCreation(
         job_id = job_id,
-        created_by = user.nick,
+        created_by = created_by,
         metadata = metadata,
         initial_page = args.url,
         concurrency = args.concurrency,
@@ -171,7 +179,7 @@ async def brozzle(self: Bot, user: User, ran, args):
             # (In this case, that means there was duplication in the list.)
             num_urls += sum(1 for key, value in res.items() if key == value)
 
-        if args.redirector == "<":
+        if is_bulk:
             try:
                 async with AIOHTTP_SESSION.get(args.url) as resp:
                     if resp.status != 200:
@@ -211,30 +219,24 @@ async def brozzle(self: Bot, user: User, ran, args):
 
 @bot.add_argument("--add-before", default = None, type = int)
 @bot.add_argument("--ensure-ruleset", default = None)
-@bot.add_argument("arg", nargs = "?")
+@bot.add_argument("arg")
 @bot.add_argument("pattern")
-@bot.add_argument("setting", choices = ("ua", "user_agent", "custom_js", "skip", "no_skip", "accept", "reject"))
+@bot.add_argument("setting", choices = ("ua", "user_agent", "custom_js", "skip", "accept"))
 @bot.add_argument("job_id")
 @bot.argparse("!addrule")
 @bot.command(("!addrule", "!ar"), required_modes = "+@")
 async def addrule(self: Bot, user: User, ran, args):
-    if args.setting in ("skip", "no_skip", "accept", "reject") and args.arg:
-        yield f"The '{args.setting}' setting does not accept arguments."
-        return
-    if args.setting in ("ua", "custom_js") and not args.arg:
-        yield f"The '{args.setting}' setting requires an additional argument."
-        return
     # Ensure the regex can be compiled
     db.regex.compile(args.pattern)
 
     async with ENGINE.begin() as conn:
         queue = db.Connection(conn)
-        if args.setting in ("skip", "no_skip"):
-            key = "skip"
-            payload = (args.setting == "skip")
-        elif args.setting in ("accept", "reject"):
-            key = "accept"
-            payload = (args.setting == "accept")
+        if args.setting in ("skip", "accept"):
+            key = args.setting
+            val = args.arg.lower()
+            if val not in ("true", "false"):
+                raise CustomMessageException("Sorry, but that is not a valid value. Please select between true and false.")
+            payload = (val == "true")
         elif args.setting in ("ua", "user_agent"):
             key = "ua"
             try:
@@ -390,7 +392,7 @@ async def depth(self: Bot, user: User, ran, job_id, newval):
             yield f"Successfully updated job depth. Recalculated status: {new_status.name}"
 
 @bot.command("!abort", required_modes = "+@")
-async def abort(self: Bot, user: User, ran, id, job_id):
+async def abort(self: Bot, user: User, ran, job_id):
     job_id = db.parse_id(job_id)
     async with ENGINE.begin() as conn:
         queue = db.Connection(conn)
