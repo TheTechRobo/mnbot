@@ -78,7 +78,12 @@
 	</iframe>
 	<section id="all">
 		<h4>All Pages</h4>
-		<a href="{{ url_for('job_pages', job_id = job.id) }}">List all pages</a> (in order of creation)
+		List: <ul>
+			<li><a href="{{ url_for('job_pages', job_id = job.id) }}">all pages</a> (in order of creation)</li>
+			<li><a href="{{ url_for('job_pending', job_id = job.id) }}">pending</a> (in queue order)</li>
+			<li><a href="{{ url_for('job_finished', job_id = job.id, show = "success") }}">succeeded</a> (finished with at least 1 successful attempt)</li>
+			<li><a href="{{ url_for('job_finished', job_id = job.id, show = "failed") }}">failed</a> (finished with no successful attempts)</li>
+		</ul>
 	</section>
 </section>
 

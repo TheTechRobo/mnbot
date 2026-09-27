@@ -333,6 +333,26 @@ async def job_pending(job_id, html):
     )
     return await pages_list(q, html, "pages_with_attempts.j2")
 
+@route_with_json("/job/<job_id>/finished")
+async def job_finished(job_id, html):
+    show = request.args['show']
+    q = (
+        sqlalchemy.select(model.pages.c.page_id, model.pages.c.payload, sqlalchemy.func.count(model.attempts.c.page_id).label("attempt_count"))
+        .select_from(model.pages)
+        .join(model.attempts, model.attempts.c.page_id == model.pages.c.page_id, isouter = True)
+        .where(model.pages.c.job_id == job_id)
+        .where(model.pages.c.attempts_remaining == 0)
+        .group_by(model.pages.c.page_id)
+    )
+    any_success = sqlalchemy.exists(sqlalchemy.select(model.attempts).where(model.attempts.c.page_id == model.pages.c.page_id).where(model.attempts.c.error == None))
+    if show == "success":
+        q = q.where(any_success.correlate(model.pages))
+    elif show == "failed":
+        q = q.where(~any_success.correlate(model.pages))
+    else:
+        abort(400)
+    return await pages_list(q, html, "pages_with_attempts.j2")
+
 @route_with_json("/job/<job_id>/claimed")
 async def job_claimed(job_id, html):
     q = pages_q(job_id).where(model.pages.c.status == model.PageStatus.CLAIMED)
@@ -380,12 +400,8 @@ async def test_ruleset(job_id, ruleset_id, html):
         )
     return {"status": 200, "settings": settings}
 
-@app.route("/page/<id>/requisites")
-async def requisites(id):
-    return get_requisites(id), {"content-type": "application/json"}
-
+@app.route("/page/<page_id>/requisites")
 async def get_requisites(page_id):
-    yield "["
     q = (
             sqlalchemy.select(model.results.c.payload)
             .select_from(model.attempts)
@@ -393,7 +409,7 @@ async def get_requisites(page_id):
             .where(model.attempts.c.page_id == page_id)
             .where(model.results.c.type == model.ResultType.REQUISITES)
     )
-    started = False
+    res = []
     async with ENGINE.connect() as conn:
         conn = await conn.execution_options(postgresql_readonly = True)
         async with conn.stream(q) as iter:
@@ -403,15 +419,27 @@ async def get_requisites(page_id):
                     for entry in requisite['chain']:
                         if req := entry['request']:
                             if req['url'].startswith("http"):
-                                if started:
-                                    yield ", "
-                                started = True
-                                yield json.dumps(req['url'])
-    yield "]"
+                                res.append(req['url'])
+    return "\n".join(res) + "\n", {"content-type": "text/plain"}
 
-@app.route("/page/<id>/outlinks")
-async def outlinks(id):
-    return get_outlinks(id), {"content-type": "application/json"}
+@app.route("/page/<page_id>/outlinks")
+async def get_outlinks(page_id):
+    q = (
+            sqlalchemy.select(model.results.c.payload)
+            .select_from(model.attempts)
+            .join(model.results, model.results.c.attempt_id == model.attempts.c.attempt_id)
+            .where(model.attempts.c.page_id == page_id)
+            .where(model.results.c.type == model.ResultType.OUTLINKS)
+    )
+    res = []
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        async with conn.stream(q) as iter:
+            async for row in iter:
+                result = row[0]
+                for outlink in result:
+                    res.append(outlink)
+    return "\n".join(res) + "\n", {"content-type": "text/plain"}
 
 @route_with_json("/job/<id>/recent")
 async def job_recent(id, html):
@@ -425,28 +453,6 @@ async def job_recent(id, html):
     if html:
         return await render_template("activity.j2", job_id = id, recently_completed = recent, claimed = claimed, pending = pending, todelta = todelta, maxes = (max_finished, max_pending))
     return {"status": 200, "recent": recent, "claimed": claimed, "pending": pending}
-
-async def get_outlinks(page_id):
-    yield "["
-    q = (
-            sqlalchemy.select(model.results.c.payload)
-            .select_from(model.attempts)
-            .join(model.results, model.results.c.attempt_id == model.attempts.c.attempt_id)
-            .where(model.attempts.c.page_id == page_id)
-            .where(model.results.c.type == model.ResultType.OUTLINKS)
-    )
-    started = False
-    async with ENGINE.connect() as conn:
-        conn = await conn.execution_options(postgresql_readonly = True)
-        async with conn.stream(q) as iter:
-            async for row in iter:
-                result = row[0]
-                for outlink in result:
-                    if started:
-                        yield ", "
-                    started = True
-                    yield json.dumps(outlink)
-    yield "]"
 
 @app.route("/screenshot/<id>.jpg")
 async def screenshot(id):
