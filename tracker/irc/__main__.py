@@ -219,17 +219,23 @@ async def brozzle(self: Bot, user: User, ran, args):
             await conn.commit()
             yield f"Queued {args.url} for Brozzler-based archival. You will be notified when it finishes. Use !status {job_id} or check {item_url(job_id)} for details."
 
+@bot.add_argument("--default", action = "store_true", default = False)
 @bot.add_argument("--add-before", default = None, type = int)
 @bot.add_argument("--ensure-ruleset", default = None)
 @bot.add_argument("arg")
-@bot.add_argument("pattern")
+@bot.add_argument("pattern", nargs = "?")
 @bot.add_argument("setting", choices = ("ua", "user_agent", "custom_js", "skip", "accept"))
 @bot.add_argument("job_id")
 @bot.argparse("!addrule")
 @bot.command(("!addrule", "!ar"), required_modes = "+@")
 async def addrule(self: Bot, user: User, ran, args):
-    # Ensure the regex can be compiled
-    db.regex.compile(args.pattern)
+    if args.default and args.add_before:
+        raise CustomMessageException("Sorry, but --default can't be used with --add-before.")
+    if (args.default and args.pattern) or (not args.default and not args.pattern):
+        raise CustomMessageException("One of --default or PATTERN must be specified, but not both.")
+    if args.pattern:
+        # Ensure the regex can be compiled
+        db.regex.compile(args.pattern)
 
     async with ENGINE.begin() as conn:
         queue = db.Connection(conn)
@@ -250,6 +256,11 @@ async def addrule(self: Bot, user: User, ran, args):
         else:
             raise RuntimeError("Unreachable code")
         ruleset = await queue.get_job_ruleset(args.job_id, for_update = True)
+        if args.default:
+            getattr(ruleset, key).default = payload
+            nid = await queue.new_ruleset(args.job_id, ruleset, args.ensure_ruleset)
+            yield f"Set default {key} rule (new ruleset ID: {nid})."
+            return
         idx = getattr(ruleset, key).add(db.JobRule(args.pattern, payload), args.add_before)
         nid = await queue.new_ruleset(args.job_id, ruleset, args.ensure_ruleset)
     yield f"Created new {key} rule at index {idx} (new ruleset ID: {nid})."
