@@ -4,23 +4,31 @@
 
 {% block content %}
 
-<section id="queues">
-	<h2>Queues</h2>
-	<p>See <a href="/queue">Pending</a> for queued items, or <a href="/claims">Claims</a> for in-progress items.</p>
-	{% if status %}
-		{% for pipeline, queues in status.items() %}
-			<p>Pipeline {{ pipeline }}:</p>
+<section id="jobs">
+	<h2>Dashboard</h2>
+	<p>Sorry, live update is currently not implemented. Refresh the page for current statistics.</p>
+	<p>There are currently {{ jobs|length }} active jobs.</p>
+	{% for job_id, initial_page, note in jobs %}
+		<article>
+			<header style="display: flex">
+				<p style="margin-bottom: 0">{{ initial_page }}</p>
+				<p style="margin-bottom: 0">
+					{% if note %} Explanation: {{ note }} {% endif %}
+				</p>
+			</header>
+			<p>Recent activity:</p>
+				<iframe src="{{ url_for('job_recent', id = job_id) }}" style="width: 100%" height="400">
+					I don't actually know if there's still any point filling this in.
+				</iframe>
 			<ul>
-				{% for queue, value in queues.items() %}
-					<li>
-						<b>{{ value }}</b> {{ queue }} items.</b>
-					</li>
-				{% endfor %}
 			</ul>
-		{% endfor %}
-	{% else %}
-		<p>There aren't any queued, running, or stashed items.</p>
-	{% endif %}
+			<footer>
+				<p style="text-align: right; margin-bottom: 0" class="low-importance">
+					<a href="{{ url_for('single_job', job_id = job_id) }}">{{ job_id }}</a>
+				</p>
+			</footer>
+		</article>
+	{% endfor %}
 </section>
 
 {% include "components/item-search.j2" %}

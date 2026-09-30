@@ -1,0 +1,5 @@
+{% extends "list.j2" %}
+
+{% block loop_href %} {{ url_for('single_page', page_id = row.page_id, html = True) }} {% endblock %}
+{% block loop_payload %} {{ row.payload }} {% endblock %}
+{% block loop_footer %} Queued at {{ row.date.replace(microsecond = 0) }} {% endblock %}

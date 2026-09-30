@@ -1,0 +1,39 @@
+{% extends "skeleton.j2" %}
+
+{% block title %} Recent activity for job {{ job_id }} {% endblock %}
+
+{% block override_header %} {% endblock %}
+
+{% block content %}
+
+<p style="text-align: right"><a href="">refresh</a></p>
+<section id="pages">
+	{% for row in recently_completed %}
+		<div style="display: flex; justify-content: space-between">
+			<a href="{{ url_for('single_page', page_id = row.page_id) }}" style="flex-grow: 1" target="_top">
+				<span style="color: {% if row.error %} red {% else %} green {% endif %}">{{ row.payload }}</span>
+			</a>
+			<span {% if row.error %} style="border-bottom: 1px dotted" title="{{ row.error.split("\n")[0] }}" {% endif %}>{% if row.error %} failed {% else %} completed {% endif %}{{ macros.ago(todelta(row.finished_at)) }}</span>
+		</div>
+	{% endfor %}
+	{% for row in claimed %}
+		<div style="display: flex; justify-content: space-between">
+			<a href="{{ url_for('single_page', page_id = row.page_id) }}" style="flex-grow: 1; color: inherit" target="_top">
+				<b>{{ row.payload }}</b>
+			</a>
+			<span>claimed</span>
+		</div>
+	{% else %}
+			(No claimed items.)
+	{% endfor %}
+	{% for row in pending %}
+		<div style="display: flex; justify-content: space-between">
+			<a href="{{ url_for('single_page', page_id = row.page_id) }}" style="flex-grow: 1" target="_top">
+				<span style="color: var(--pico-muted-color)">{{ row.payload }}</span>
+			</a>
+			<span style="color: var(--pico-muted-color)">pending</span>
+		</div>
+	{% endfor %}
+</section>
+
+{% endblock %}
