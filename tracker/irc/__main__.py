@@ -56,12 +56,14 @@ class CustomMessageException(Exception):
         self.msg = msg
 
 def select_ua(ua):
-    if user_agent := PRESET_USER_AGENTS.get(ua):
-        return  "$" + user_agent
+    if ua.startswith("$"):
+        return ua
+    elif user_agent := PRESET_USER_AGENTS.get(ua):
+        return "$" + user_agent
     elif ua in DYNAMIC_USER_AGENTS:
         return ua
     else:
-        raise ValueError("Invalid user agent selection")
+        raise CustomMessageException(f"Invalid user agent selection! Please select one of the presets ({list(PRESET_USER_AGENTS) + list(DYNAMIC_USER_AGENTS)}) or prefix the user agent with $ for a freeform input.")
 
 async def fetch_custom_js(url):
     try:
@@ -96,7 +98,7 @@ def validate_depth(depth):
 @bot.add_argument("--concurrency", "-c", type = int, default = 1)
 @bot.add_argument(
     "--user-agent", "-u",
-    choices = list(DYNAMIC_USER_AGENTS) + list(PRESET_USER_AGENTS.keys()),
+    metavar = "{" + ",".join(list(DYNAMIC_USER_AGENTS) + list(PRESET_USER_AGENTS.keys())) + ",$...}",
     default = "default"
 )
 @bot.add_argument("--explanation", "--explain", "-e")
@@ -239,10 +241,7 @@ async def addrule(self: Bot, user: User, ran, args):
             payload = (val == "true")
         elif args.setting in ("ua", "user_agent"):
             key = "ua"
-            try:
-                payload = select_ua(args.arg)
-            except ValueError:
-                raise CustomMessageException("Sorry, but that is not a valid user agent. Choices include: " + ", ".join(PRESET_USER_AGENTS.keys()) + ", ".join(DYNAMIC_USER_AGENTS))
+            payload = select_ua(args.arg)
         elif args.setting == "custom_js":
             if "@" not in user.modes:
                 raise CustomMessageException("Sorry, but only operators can include custom JavaScript.")
@@ -323,11 +322,11 @@ async def concurrency(self: Bot, user: User, ran, job_id, num):
     yield f"Updated concurrency of {job_id} to {num}."
 
 async def generate_status_message(job: str, queue: db.Connection):
-    q = sqlalchemy.select(model.jobs.c.status, model.jobs.c.initial_page, model.jobs.c.note)
+    q = sqlalchemy.select(model.jobs.c.status, model.jobs.c.initial_page, model.jobs.c.note).where(model.jobs.c.job_id == job)
     ts = db.parse_id_ex(job).timestamp / 1000
     date = datetime.datetime.fromtimestamp(ts, datetime.UTC)
     res = await queue.conn.execute(q)
-    ent = res.first()
+    ent = res.one_or_none()
     if not ent:
         return f"No job with ID {repr(job)} could be found."
     return f"Job {job} ({repr(ent[1])}) has status {ent[0].name} and was queued at {date.isoformat(timespec='seconds')}. See {item_url(job)} for more information. Explanation: {ent[2]}"
@@ -390,6 +389,23 @@ async def depth(self: Bot, user: User, ran, job_id, newval):
             yield f"Successfully updated job depth. The job was aborted and won't be resumed automatically."
         else:
             yield f"Successfully updated job depth. Recalculated status: {new_status.name}"
+
+@bot.command("!nice", required_modes = "+@")
+async def setnice(self: Bot, user: User, ran, job_id, newval):
+    try:
+        nice = int(newval)
+    except ValueError:
+        raise CustomMessageException("Invalid nice value!")
+    if nice < -10 and "@" not in user.modes:
+        raise CustomMessageException("Sorry, but only operators can queue with a niceness below -10.")
+
+    job_id = db.parse_id(job_id)
+    async with ENGINE.begin() as conn:
+        r = await conn.execute(sqlalchemy.update(model.jobs).where(model.jobs.c.job_id == job_id).values(nice = nice))
+        if r.rowcount == 0:
+            raise CustomMessageException(f"Job {job_id} not found.")
+        assert r.rowcount == 1
+    yield f"Successfully updated the niceness of job {job_id} to {nice}."
 
 @bot.command("!abort", required_modes = "+@")
 async def abort(self: Bot, user: User, ran, job_id):
