@@ -342,12 +342,12 @@ class Brozzler:
         ua = self._create_user_agent(version)
 
         # Write job info to the WARC
-        logger.debug("writing item info")
+        logger.debug("writing job info")
         self._write_warcprox_record(
-            "metadata:mnbot-job-metadata",
+            f"metadata:mnbot-metadata/{self.job.attempt_id}",
             "application/json",
             json.dumps({
-                "job": self.job.full_job,
+                "claim": self.job.full_job,
                 "version": VERSION,
                 "browser": {
                     "executable": self.chrome_exe,
@@ -397,13 +397,13 @@ class Brozzler:
                 custom_js_screenshot = base64.b85encode(self.custom_js_screenshot).decode()
 
         logger.debug("extracting outlinks")
-        outlinks = self.browser.extract_outlinks()
+        outlinks = [outlink for outlink in self.browser.extract_outlinks() if outlink.startswith("http")]
         logger.debug("visiting anchors")
         self.browser.visit_hashtags(final_url, [], outlinks)
 
         with self.websock_thread_lock:
             r = Result(
-                id = self.job.full_job['id'],
+                attempt_id = self.job.attempt_id,
                 final_url = final_url,
                 outlinks = list(outlinks),
                 custom_js = custom_js_result,
@@ -413,10 +413,11 @@ class Brozzler:
             )
             logger.debug("writing job result data")
             self._write_warcprox_record(
-                "metadata:mnbot-job-result",
+                f"metadata:mnbot-result/{self.job.attempt_id}",
                 "application/json",
                 json.dumps({
-                    "result": r.dict()
+                    "result": r.dict(),
+                    "attempt_id": self.job.attempt_id,
                 }).encode(),
                 self.job.warc_prefix
             )
@@ -445,20 +446,12 @@ def main():
             write_message("requisites", [dataclasses.asdict(v) for v in result.requisites.values()])
             write_message("status_code", result.status_code)
 
-            screenshot = browser.screenshot
-            thumbnail = browser.thumbnail
-            if screenshot:
-                screenshot = base64.b85encode(screenshot).decode()
-            if thumbnail:
-                thumbnail = base64.b85encode(thumbnail).decode()
-            if screenshot or thumbnail:
-                write_message("screenshot", {
-                    "full": screenshot,
-                    "thumb": thumbnail,
-                })
+            if browser.screenshot:
+                screenshot = base64.b85encode(browser.screenshot).decode()
+                write_message("screenshot", screenshot)
 
             if result.custom_js_screenshot:
-                write_message("cjs_screenshot", {"full": result.custom_js_screenshot})
+                write_message("cjs_screenshot", result.custom_js_screenshot)
             if jsr := result.custom_js:
                 write_message("custom_js", result.custom_js)
                 if jsr['status'] != "success":

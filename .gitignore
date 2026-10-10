@@ -11,9 +11,11 @@ target/packer/out
 .stignore
 pyrightconfig.json
 TODO
-run.sh
+run*.sh
 .env
 __pycache__/
 *.py[co]
 client/warcupload/testdata
 upload-space/
+*.tar
+PIPELINES

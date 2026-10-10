@@ -3,15 +3,23 @@
 function validateForm() {
 	const e = document.getElementById("search-item");
 	e.value = e.value.trim();
-	const err = document.getElementById("search-form").querySelector(".error");
-	const isValid = /^[0-9A-F]{8}-[0-9A-F]{4}-[4][0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i.test(e.value);
+	const err = document.getElementById("search-item-usage");
+	const erroldid = document.getElementById("search-item-uuid4");
+	const isValid = /[0-9a-zA-Z]+\.[0-9a-zA-Z]/i.test(e.value) || /^[0-9A-F]{8}-[0-9A-F]{4}-7[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i.test(e.value);
 	if (isValid) {
 		e.ariaInvalid = false;
 		err.hidden = true;
+		erroldid.hidden = true;
 		return true;
 	} else {
+		if (/^[0-9A-F]{8}-[0-9A-F]{4}-4[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i.test(e.value)) {
+			erroldid.hidden = false;
+			err.hidden = true;
+		} else {
+			erroldid.hidden = true;
+			err.hidden = false;
+		}
 		e.ariaInvalid = true;
-		err.hidden = false;
 		return false;
 	}
 }
@@ -50,7 +58,8 @@ function submitItemSearch(event) {
 			/>
 			<button type="submit" id="search-submit">Search</button>
 		</fieldset>
-		<small id="search-item-helper">Searching by URL or domain is currently unimplemented.</small>
-		<small class="error" hidden id="search-item-usage">You must provide a valid job UUID.</small>
+		<small id="search-item-helper">You can enter either a job or page ID, or a URL prefix.</small>
+		<small class="error" hidden id="search-item-usage">This field should either contain a valid UUID or URL prefix.</small>
+		<small class="error error2" hidden id="search-item-uuid4">You've entered a very old item ID. Please see the documentation for more information.</small>
 	</form>
 </article>
