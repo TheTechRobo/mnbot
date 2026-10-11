@@ -39,8 +39,8 @@ services:
     volumes:
       - ./warcprox-data:/input
     environment:
-      USERNAME: ${USERNAME}
-      TARGET_URL: ${TARGET_URL}
+      RSYNC_URL: ${RSYNC_URL}
+      RSYNC_PASSWORD: ${RSYNC_PASSWORD}
     # No depends_on for warcprox as it can work without it
   worker:
     restart: always

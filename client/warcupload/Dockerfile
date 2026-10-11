@@ -1,19 +1,9 @@
-FROM worktree.ca/thetechrobo/bullseye-client AS bsc
+FROM python:3.11-bookworm
 
-FROM python:3.9-alpine
-
-RUN apk add --no-cache tini
-
-RUN pip3 install --break-system-packages warcprox
-RUN pip3 install --break-system-packages --upgrade 'cryptography<=40.0.2'
-
-COPY --from=bsc /bullseye-client /usr/local/bin/bullseye-client
-RUN chmod +x /usr/local/bin/bullseye-client
-
-RUN mkdir /app
 RUN mkdir /input
-COPY cmd.sh /app
-COPY app.py /app
+RUN apt-get update && apt-get install tini rsync wget && apt-get clean
+RUN pip install --no-cache-dir requests
+RUN wget https://github.com/ArchiveTeam/ArchiveBot/raw/cff95a86d9ce36b4d67dbd98fd37bdfc1cc9b398/uploader/uploader.py -O /uploader.py
 
-ENTRYPOINT ["/sbin/tini", "--", "/app/cmd.sh"]
+ENTRYPOINT ["/bin/tini", "--", "python", "/uploader.py", "/input/warcs"]
 
