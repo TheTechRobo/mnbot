@@ -1,0 +1,11 @@
+[Unit]
+Description=Upload WARCs to an rsync target
+
+[Container]
+ServiceName=mnbot-warcupload
+ContainerName=mnbot-warcupload
+Volume=warcprox.volume:/input
+Image=warcupload.build
+
+[Service]
+Restart=always

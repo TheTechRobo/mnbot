@@ -19,3 +19,4 @@ client/warcupload/testdata
 upload-space/
 *.tar
 PIPELINES
+*.conf

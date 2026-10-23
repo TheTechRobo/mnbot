@@ -1,0 +1,24 @@
+[Install]
+WantedBy=multi-user.target default.target
+
+[Container]
+Environment=TRACKER_URL=
+# Either 0 or 1. Enables debug logging and changes the reported version to add '-debug'
+Environment=DEBUG=0
+
+SeccompProfile=../chrome.json
+
+# See the wiki page on deployment if you have issues with AppArmor.
+#AppArmor=
+
+# You have to include this, unfortunately.
+# Change it to suit your actual installation dir.
+#
+# Incidentally, these kinds of lack of portability in Quadlets combined with
+# the lack of real tooling for them (say what you will about Docker, but
+# having the 'docker compose' CLI is wayyyyy better than what you get here)
+# are *the reason* I'm not moving from docker on my own systems (for now, at least).
+# I get it's a better design, and better integrated with the rest of the system,
+# but ugh. docker-compose.yml is pretty much entirely plug-and-play.
+[Service]
+WorkingDirectory=%E/containers/systemd/mnbotquadlets/_quadlets

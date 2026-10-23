@@ -1,0 +1,6 @@
+[Container]
+Environment=RSYNC_URL=
+Environment=RSYNC_PASSWORD=
+
+[Install]
+WantedBy=multi-user.target default.target

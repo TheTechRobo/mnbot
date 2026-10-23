@@ -1,0 +1,13 @@
+[Unit]
+Description=RethinkDB instance for mnbot
+
+[Container]
+ServiceName=mnbot-rethinkdb
+Image=docker.io/rethinkdb:latest
+ContainerName=mnbot-rethinkdb
+Pod=mnbot-client.pod
+Volume=rethinkdb.volume:/data
+StopSignal=SIGINT
+
+[Service]
+Restart=always

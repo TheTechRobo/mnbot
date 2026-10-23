@@ -1,0 +1,22 @@
+[Unit]
+Description=mnbot worker
+After=warcprox.container
+Requires=warcprox.container
+After=rethinkdb.container
+Requires=rethinkdb.container
+After=xvnc.container
+Requires=xvnc.container
+
+[Container]
+ServiceName=mnbot-worker
+Image=worker.build
+ContainerName=mnbot-worker
+Pod=mnbot-client.pod
+SeccompProfile=../chrome.json
+
+StopSignal=SIGINT
+StopTimeout=900
+
+[Service]
+Restart=always
+TimeoutSec=infinity

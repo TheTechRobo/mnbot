@@ -1,0 +1,11 @@
+[Unit]
+Description=XVNC4 instance for headful Chrome
+
+[Container]
+ServiceName=mnbot-xvnc
+Image=xvnc.build
+ContainerName=mnbot-xvnc
+Pod=mnbot-client.pod
+
+[Service]
+Restart=always

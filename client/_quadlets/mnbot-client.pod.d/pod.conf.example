@@ -1,0 +1,5 @@
+[Pod]
+# VNC (view-only)
+PublishPort=5902:5902
+# RethinkDB admin console
+PublishPort=4186:8080

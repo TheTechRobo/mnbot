@@ -1,0 +1,6 @@
+[Pod]
+PodName=test
+
+AddHost=rethinkdb:127.0.0.1
+AddHost=x:127.0.0.1
+AddHost=warcprox:127.0.0.1

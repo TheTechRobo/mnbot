@@ -1,0 +1,20 @@
+[Unit]
+Description=Warcprox instance for mnbot
+After=rethinkdb.container
+Requires=rethinkdb.container
+
+[Container]
+ServiceName=mnbot-warcprox
+Image=warcprox.build
+ContainerName=mnbot-warcprox
+Pod=mnbot-client.pod
+StopSignal=SIGINT
+Volume=warcprox.volume:/data
+Ulimit=nofile=65536:65536
+
+Environment=rethinkdb_dedup_url=rethinkdb://localhost:28015/cb-warcprox/dedup
+Environment=rethinkdb_stats_url=rethinkdb://localhost:28015/cb-warcprox/stats
+
+[Service]
+Restart=always
+TimeoutSec=infinity

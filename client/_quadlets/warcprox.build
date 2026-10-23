@@ -1,0 +1,3 @@
+[Build]
+ImageTag=localhost/mnbot-warcprox
+SetWorkingDirectory=../warcprox
