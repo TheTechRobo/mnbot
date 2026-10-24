@@ -426,6 +426,20 @@ async def abort(self: Bot, user: User, ran, job_id):
         await queue.abort_job(job_id)
         yield f"Job {job_id} has been aborted."
 
+# Hack - need to do a better API for this
+@bot.command("!untag")
+async def untag(self: Bot, user: User, ran, job_id):
+    async with ENGINE.connect() as conn:
+        job_id = db.parse_id(job_id)
+        q = sqlalchemy.update(model.jobs).where(model.jobs.c.job_id == job_id).values(tag = None)
+        res = await conn.execute(q)
+        if res.rowcount == 0:
+            yield f"Job {job_id} does not exist."
+            return
+        assert res.rowcount == 1
+        await conn.commit()
+        yield f"Successfully changed tag of {job_id} to None."
+
 @bot.command("!tag")
 async def tag(self: Bot, user: User, ran, command: str, pipeline_id: str, tag = None):
     async with ENGINE.connect() as conn:
@@ -452,7 +466,6 @@ async def tag(self: Bot, user: User, ran, command: str, pipeline_id: str, tag = 
                 yield "A tag must be provided."
                 return
             job_id, tag = db.parse_id(command), pipeline_id
-            if tag == "": tag = None
             q = sqlalchemy.update(model.jobs).where(model.jobs.c.job_id == job_id).values(tag = tag)
             res = await conn.execute(q)
             if res.rowcount == 0:
