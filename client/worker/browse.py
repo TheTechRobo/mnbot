@@ -289,7 +289,7 @@ class Brozzler:
                 # Makes it actually return the value
                 "returnByValue": True,
             },
-            timeout = 90,
+            timeout = 300,
         )
         try:
             custom_js_result = {
