@@ -1,12 +1,14 @@
 import argparse
 import asyncio
-import sys
+import secrets
+import string
+import time
+
+import uuid_utils
+import sqlalchemy
 
 from ..common import model
 from ..common import db
-
-import secrets
-import string
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--uri", default = None, help = "URI to a postgres database; default is the value of MNBOT_DATABASE_URI")
@@ -42,6 +44,36 @@ subparser_add_pipeline = subparsers.add_parser("add_pipeline")
 subparser_add_pipeline.set_defaults(func = add_pipeline)
 subparser_add_pipeline.add_argument("--matchonly", action = "store_true", default = False)
 subparser_add_pipeline.add_argument("id")
+
+async def delete_old_results(args):
+    """
+    Expires old results.
+
+    To delete screenshots older than N days, use --screenshot-days N.
+    If you are using this script, you may wish to create an index:
+        CREATE INDEX screenshot_removal_cronjob ON results (result_id ASC) WHERE type = 'SCREENSHOT' and payload != 'null'::jsonb;
+
+    Intended for use in a cronjob.
+    """
+    engine = await db.create_engine(args.uri, check_version = True)
+    async with engine.begin() as conn:
+        if args.screenshot_days is not None:
+            target_ts = int((time.time() - args.screenshot_days * 86400) * 1e+9)
+            maxid = uuid_utils.uuid7(nanoseconds = target_ts)
+            q = (
+                sqlalchemy.update(model.results)
+                .where(model.results.c.result_id < maxid)
+                .where(model.results.c.type == model.ResultType.SCREENSHOT)
+                .where(model.results.c.payload != sqlalchemy.text("'null'::jsonb"))
+                .values(payload = sqlalchemy.text("'null'::jsonb"))
+            )
+            res = await conn.execute(q)
+            print("Deleted", res.rowcount, "screenshots")
+    await engine.dispose()
+
+subparser_dlos = subparsers.add_parser("delete_old_results")
+subparser_dlos.set_defaults(func = delete_old_results)
+subparser_dlos.add_argument("--screenshot-days", default = None, type = int)
 
 if __name__ == "__main__":
     args = parser.parse_args()

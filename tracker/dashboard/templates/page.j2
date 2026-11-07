@@ -61,12 +61,14 @@
 				<li class="res-screenshot">
 					<b>Screenshot: </b>
 					<br />
-					{% if attempt.results.screenshot %}
+					{% if attempt.results.screenshot and attempt.results.screenshot != "removed" %}
 						<a href="{{ url_for('screenshot', id = attempt.results.screenshot) }}">
 							<img class="thumb" src="{{ url_for('screenshot', id = attempt.results.screenshot) }}" alt="Page screenshot" />
 							<br />
 							<small>Click to enlarge image</small>
 						</a>
+					{% elif attempt.results.screenshot == "removed" %}
+						<em>The screenshot has expired.</em>
 					{% else %}
 						<em>No screenshot was recorded.</em>
 					{% endif %}

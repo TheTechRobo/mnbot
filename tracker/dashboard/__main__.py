@@ -7,9 +7,10 @@ import dataclasses
 import datetime
 import urllib.parse
 import json
-import urlcanon
+import typing
 
-import sqlalchemy, sqlalchemy.ext.asyncio, sqlalchemy.dialects.postgresql
+import sqlalchemy, sqlalchemy.ext.asyncio, sqlalchemy.dialects.postgresql, sqlalchemy.exc
+import urlcanon
 from quart.json.provider import DefaultJSONProvider
 
 from ..common import db, model
@@ -59,7 +60,7 @@ class JobInfoPacket:
 
 @dataclasses.dataclass
 class ResultsInfoPacket:
-    screenshot: model.UUID | None = None
+    screenshot: model.UUID | None | typing.Literal['removed'] = None
     cjs_screenshot: model.UUID | None = None
     custom_js_result: dict | None = None
     outlinks: list[str] | None = None
@@ -206,7 +207,10 @@ async def single_page(page_id, html):
                     case model.ResultType.REQUISITES:
                         results.requisites = result.payload
                     case model.ResultType.SCREENSHOT:
-                        results.screenshot = result.result_id
+                        if result.payload is None:
+                            results.screenshot = "removed"
+                        else:
+                            results.screenshot = result.result_id
                     case model.ResultType.STATUS_CODE:
                         results.status_code = result.payload
                     case model.ResultType.CUSTOM_JS:
@@ -459,10 +463,14 @@ async def screenshot(id):
     q = sqlalchemy.select(model.results.c.payload).where(model.results.c.result_id == id)
     async with ENGINE.connect() as conn:
         conn = await conn.execution_options(postgresql_readonly = True)
-        res = await conn.scalar(q)
-    if not res:
+        res = await conn.execute(q)
+    try:
+        if screenshot := res.scalar_one():
+            return base64.b85decode(screenshot), {"Content-Type": "image/jpeg"}
+        else:
+            return await render_template("error.j2", code = 410, reason = "Gone", description = "The screenshot has been removed from the database."), 410
+    except sqlalchemy.exc.NoResultFound:
         return await render_template("error.j2", code = 404, reason = "Screenshot not found", description = "Screenshot was not found."), 404
-    return base64.b85decode(res), {"Content-Type": "image/jpeg"}
 
 @route_with_json("/pipelines")
 async def pipelines(html):
