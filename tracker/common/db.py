@@ -867,11 +867,13 @@ class Pipeline:
         Returns a tuple of (page_id, payload, ruleset_id, page_settings).
         """
         to_skip = []
+        rv = None
         async for page in self.parent.all_pending_pages(job_id, _page_id = _page_id):
             if page.page_settings.skip:
                 to_skip.append(page.page_id)
             else:
-                return page
+                rv = page
+                break
 
         if to_skip:
             update_query = (
@@ -880,6 +882,7 @@ class Pipeline:
                 .where(model.pages.c.page_id.in_(to_skip))
             )
             await self.conn.execute(update_query)
+        return rv
 
     @_wrap_serialization_failure
     async def _claim_page(self, job_id: model.UUID, pipeline_version: str, pipeline_slot: int) -> PageClaimInfo | None:

@@ -1129,6 +1129,27 @@ async def test_recent_activity(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         recent, claim, pending = map_to_payload(await q.get_recent_activity(job1, 2, 2))
         assert recent == ["c", "a"] and claim == ["d"] and pending == []
 
+@_test
+async def test_skip_always_updates(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests that skip rules always update the page status to SKIPPED, even before the job has completed.
+    (This is a regression test.)
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        ruleset = default_ruleset()
+        ruleset.skip.add(db.JobRule("foo", True))
+        job1 = await make_job(q, concurrency = 1, initial_ruleset = ruleset)
+        await make_pages(q, job1, "foo", "bar", "baz")
+        await q.create_pipeline("pipe", False, "")
+        pipe = await q.pipeline("pipe", 0)
+
+        assert [page.payload async for page in q.all_pending_pages(job1)] == ["foo", "bar", "baz"]
+        assert (await pipe.find_claim_page("", 0)).payload == "bar"
+        assert [page.payload async for page in q.all_pending_pages(job1)] == ["baz"]
+        assert (await pipe.find_claim_page("", 0)).payload == "baz"
+        assert [page.payload async for page in q.all_pending_pages(job1)] == []
+
 @db._wrap_serialization_failure
 async def _commit(conn):
     await conn.commit()
