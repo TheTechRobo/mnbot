@@ -1,5 +1,6 @@
 services:
   x:
+    image: ghcr.io/thetechrobo/mnbot-xvnc4:master
     build: xvnc4
     expose:
       - "5902"
@@ -17,6 +18,7 @@ services:
   warcprox:
     build:
       context: warcprox
+    image: ghcr.io/thetechrobo/mnbot-warcprox:master
     environment:
       # Why use RethinkDB, you ask?
       # It allows us to garbage-collect dedup and stats from another container.
@@ -36,6 +38,7 @@ services:
     restart: always
     build:
       context: warcupload
+    image: ghcr.io/thetechrobo/mnbot-warcupload:master
     volumes:
       - ./warcprox-data:/input
     environment:
@@ -46,6 +49,7 @@ services:
     restart: always
     build:
       context: worker
+    image: ghcr.io/thetechrobo/mnbot-worker:master
     environment:
       TRACKER_URL: ${TRACKER_URL}
       DEBUG: ${WORKER_DEBUG}
@@ -74,6 +78,7 @@ services:
   chrome_test:
     build:
       context: worker
+    image: ghcr.io/thetechrobo/mnbot-worker:master
     security_opt:
       - seccomp=chrome.json
       - apparmor=${APPARMOR_PROFILE}

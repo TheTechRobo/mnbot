@@ -3,7 +3,7 @@ Description=XVNC4 instance for headful Chrome
 
 [Container]
 ServiceName=mnbot-xvnc
-Image=xvnc.build
+Image=xvnc.image
 ContainerName=mnbot-xvnc
 Pod=mnbot-client.pod
 

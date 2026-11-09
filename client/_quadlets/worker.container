@@ -2,14 +2,17 @@
 Description=mnbot worker
 After=warcprox.container
 Requires=warcprox.container
+BindsTo=warcprox.container
 After=rethinkdb.container
 Requires=rethinkdb.container
+BindsTo=rethinkdb.container
 After=xvnc.container
 Requires=xvnc.container
+BindsTo=xvnc.container
 
 [Container]
 ServiceName=mnbot-worker
-Image=worker.build
+Image=worker.image
 ContainerName=mnbot-worker
 Pod=mnbot-client.pod
 SeccompProfile=../chrome.json

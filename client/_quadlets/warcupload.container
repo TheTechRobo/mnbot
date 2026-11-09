@@ -5,7 +5,7 @@ Description=Upload WARCs to an rsync target
 ServiceName=mnbot-warcupload
 ContainerName=mnbot-warcupload
 Volume=warcprox.volume:/input
-Image=warcupload.build
+Image=warcupload.image
 
 [Service]
 Restart=always

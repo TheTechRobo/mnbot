@@ -1,3 +1,0 @@
-[Build]
-ImageTag=localhost/mnbot-warcupload
-SetWorkingDirectory=../warcupload

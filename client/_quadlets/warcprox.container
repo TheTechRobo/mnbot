@@ -2,10 +2,11 @@
 Description=Warcprox instance for mnbot
 After=rethinkdb.container
 Requires=rethinkdb.container
+BindsTo=rethinkdb.container
 
 [Container]
 ServiceName=mnbot-warcprox
-Image=warcprox.build
+Image=warcprox.image
 ContainerName=mnbot-warcprox
 Pod=mnbot-client.pod
 StopSignal=SIGINT
