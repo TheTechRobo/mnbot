@@ -18,7 +18,7 @@
 		</li>
 		<li><b data-tooltip="Lower nice values are run first.">Nice: </b>{{ job.nice }}</li>
 		<li><b>Created at: </b>{{ timestamp }}</li>
-		<li><b>Max depth: </b>{{ job.depth }}</li>
+		<li><b>Max depth: </b>{% if job.depth is none %} Unlimited {% else %} {{ job.depth }} {% endif %}</li>
 		<li><b>Max concurrency: </b>{{ job.concurrency }} ({{ job.active_claims|length }} active claims)</li>
 		{% if job.note %}
 			<li><b>Explanation: </b>{{ job.note }}</li>

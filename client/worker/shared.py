@@ -7,7 +7,7 @@ logging.basicConfig(format = "%(asctime)s %(levelname)s <:%(thread)s> : %(messag
 # Update this whenever you make a change, cosmetic or not.
 # During development you can ignore it, but when you actually
 # push it to prod, it *must* be updated.
-VERSION = "20261105.01"
+VERSION = "20261108.01"
 
 DEBUG = os.environ.get("DEBUG") == "1"
 if DEBUG:
@@ -39,6 +39,7 @@ class Result:
     status_code: int
     requisites: dict[str, Chain]
     custom_js_screenshot: str | None
+    rendered_dom: str
 
     # Create a dict to write to the WARC
     def dict(self) -> dict[str, typing.Any]:

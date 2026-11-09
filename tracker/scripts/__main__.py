@@ -53,6 +53,11 @@ async def delete_old_results(args):
     If you are using this script, you may wish to create an index:
         CREATE INDEX screenshot_removal_cronjob ON results (result_id ASC) WHERE type = 'SCREENSHOT' and payload != 'null'::jsonb;
 
+    To delete DOM snapshots older than N days, use --dom-days N.
+    You may wish to create an index:
+        CREATE INDEX dom_removal_cronjob ON results (result_id ASC) WHERE type = 'RENDERED_DOM';
+    (The entire row is deleted, unlike a screenshot.)
+
     Intended for use in a cronjob.
     """
     engine = await db.create_engine(args.uri, check_version = True)
@@ -69,11 +74,22 @@ async def delete_old_results(args):
             )
             res = await conn.execute(q)
             print("Deleted", res.rowcount, "screenshots")
+        if args.dom_days is not None:
+            target_ts = int((time.time() - args.dom_days * 86400) * 1e+9)
+            maxid = uuid_utils.uuid7(nanoseconds = target_ts)
+            q = (
+                sqlalchemy.delete(model.results)
+                .where(model.results.c.result_id < maxid)
+                .where(model.results.c.type == model.ResultType.RENDERED_DOM)
+            )
+            res = await conn.execute(q)
+            print("Deleted", res.rowcount, "DOM snapshots")
     await engine.dispose()
 
 subparser_dlos = subparsers.add_parser("delete_old_results")
 subparser_dlos.set_defaults(func = delete_old_results)
 subparser_dlos.add_argument("--screenshot-days", default = None, type = int)
+subparser_dlos.add_argument("--dom-days", default = None, type = int)
 
 if __name__ == "__main__":
     args = parser.parse_args()

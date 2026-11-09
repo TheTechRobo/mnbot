@@ -1,0 +1,5 @@
+Note! Before upgrading, be sure to shut down all server processes.
+
+Schema version 1 -> 2:
+	ALTER TYPE public.resulttype ADD VALUE 'RENDERED_DOM' AFTER 'CUSTOM_JS';
+	UPDATE options SET value = '2' WHERE key = 'version';

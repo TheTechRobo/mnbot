@@ -181,7 +181,7 @@ async def run_job(ws: Websocket, full_job: dict, info_url: str):
                         res = json.loads(res)
                         type = res['type']
                         payload = res['payload']
-                        if type in ("status_code", "outlinks", "final_url", "requisites", "custom_js", "screenshot", "cjs_screenshot"):
+                        if type in ("status_code", "outlinks", "final_url", "requisites", "custom_js", "screenshot", "cjs_screenshot", "rendered_dom"):
                             await ws.store_result(attempt_id, type, payload)
                         elif type == "error":
                             # Cancel tasks, since both stdout and pread are about to get closed.

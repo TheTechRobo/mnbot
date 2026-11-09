@@ -67,6 +67,7 @@ class ResultsInfoPacket:
     requisites: list | None = None
     status_code: int | None = None
     final_url: str | None = None
+    rendered_dom: model.UUID | None = None
 
 @dataclasses.dataclass
 class AttemptInfoPacket:
@@ -215,6 +216,8 @@ async def single_page(page_id, html):
                         results.status_code = result.payload
                     case model.ResultType.CUSTOM_JS:
                         results.custom_js_result = result.payload
+                    case model.ResultType.RENDERED_DOM:
+                        results.rendered_dom = result.result_id if result.payload is not None else None
             ruleset = db.JobRuleset.from_row(row)
             applied_settings = db.PageSettings.from_ruleset(page_packet.url, ruleset)
             page_packet.all_attempts.append(AttemptInfoPacket(
@@ -471,6 +474,16 @@ async def screenshot(id):
             return await render_template("error.j2", code = 410, reason = "Gone", description = "The screenshot has been removed from the database."), 410
     except sqlalchemy.exc.NoResultFound:
         return await render_template("error.j2", code = 404, reason = "Screenshot not found", description = "Screenshot was not found."), 404
+
+@app.route("/dom/<id>.html")
+async def dom(id):
+    q = sqlalchemy.select(model.results.c.payload).where(model.results.c.result_id == id).where(model.results.c.type == model.ResultType.RENDERED_DOM)
+    async with ENGINE.connect() as conn:
+        conn = await conn.execution_options(postgresql_readonly = True)
+        res = await conn.scalar(q)
+    if res:
+        return res, {"Content-Disposition": "attachment", "Content-Type": "text/plain"}
+    return await render_template("error.j2", code = 404, reason = "DOM snapshot not found", description = "The DOM snapshot does not exist or was removed."), 404
 
 @route_with_json("/pipelines")
 async def pipelines(html):

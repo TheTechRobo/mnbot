@@ -52,6 +52,11 @@
 					{{ macros.build_settings(attempt.applied_settings, false) }}
 					(Ruleset: {{ attempt.ruleset.job_ruleset_id }})
 				</li>
+				{% if attempt.results.rendered_dom %}
+					<li class="res-dom">
+						<b>DOM snapshot: </b><a href="{{ url_for('dom', id = attempt.results.rendered_dom) }}">Download</a>
+					</li>
+				{% endif %}
 				<li>
 					<b>Status code: </b>{{ attempt.results.status_code }}
 				</li>

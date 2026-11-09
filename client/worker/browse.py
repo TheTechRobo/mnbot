@@ -410,6 +410,7 @@ class Brozzler:
                 status_code = self.status_code,
                 requisites = self.url_log,
                 custom_js_screenshot = custom_js_screenshot,
+                rendered_dom = outer_html,
             )
             logger.debug("writing job result data")
             self._write_warcprox_record(
@@ -445,6 +446,7 @@ def main():
             write_message("outlinks", result.outlinks)
             write_message("requisites", [dataclasses.asdict(v) for v in result.requisites.values()])
             write_message("status_code", result.status_code)
+            write_message("rendered_dom", result.rendered_dom)
 
             if browser.screenshot:
                 screenshot = base64.b85encode(browser.screenshot).decode()
