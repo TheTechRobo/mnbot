@@ -1,3 +1,4 @@
+import enum
 import dataclasses
 import typing
 
@@ -69,3 +70,17 @@ class Chain:
     """
     chain: list[Pair]
     id: str
+
+class DownloadCompletion(enum.StrEnum):
+    UNFINISHED = "UNFINISHED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+@dataclasses.dataclass
+class Download:
+    url: str
+    status: DownloadCompletion
+    received_bytes: int
+
+    total_bytes: int | None
+    """total_bytes may be 0 if the browser does not know. It may be None if no downloadProgress events are received."""

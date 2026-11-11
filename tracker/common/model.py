@@ -5,7 +5,7 @@ import enum
 
 from uuid import UUID
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 class JobStatus(enum.Enum):
     ACTIVE = 0
@@ -36,6 +36,7 @@ class ResultType(enum.Enum):
     CUSTOM_JS_SCREENSHOT = 5
     CUSTOM_JS = 6
     RENDERED_DOM = 7
+    DOWNLOAD_LOG = 8
 
 class Column(sqlalchemy.Column):
     inherit_cache = True

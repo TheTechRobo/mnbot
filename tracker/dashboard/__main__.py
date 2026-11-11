@@ -68,6 +68,7 @@ class ResultsInfoPacket:
     status_code: int | None = None
     final_url: str | None = None
     rendered_dom: model.UUID | None = None
+    download_log: list | None = None
 
 @dataclasses.dataclass
 class AttemptInfoPacket:
@@ -218,6 +219,8 @@ async def single_page(page_id, html):
                         results.custom_js_result = result.payload
                     case model.ResultType.RENDERED_DOM:
                         results.rendered_dom = result.result_id if result.payload is not None else None
+                    case model.ResultType.DOWNLOAD_LOG:
+                        results.download_log = result.payload
             ruleset = db.JobRuleset.from_row(row)
             applied_settings = db.PageSettings.from_ruleset(page_packet.url, ruleset)
             page_packet.all_attempts.append(AttemptInfoPacket(

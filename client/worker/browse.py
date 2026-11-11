@@ -10,7 +10,7 @@
 import base64
 import threading
 import time
-import typing, urllib.request, json, shutil, sys, traceback
+import typing, urllib.request, json, shutil, sys, traceback, datetime
 
 from shared import DEBUG, VERSION, PROXY_URL, BadStatusCode, Job, MnError, Result, Timeout
 from result import *
@@ -59,13 +59,23 @@ class Brozzler:
         }
         self.websock_thread_lock = threading.Lock()
         self.url_log: dict[str, Chain] = {}
+        self.download_log: dict[str, Download] = {}
 
         # Shim for _handle_message so we can log responses
         # on_request and on_response don't allow us to see errors or the *final* response size
-        # Also allows us to create a sort of networkIdle event
         logger.debug("shimming brozzler")
         self.previous_message_handler = self.browser.websock_thread._handle_message
         self.browser.websock_thread._handle_message = self._message_handler
+
+        # Shim for navigate_to_page so we can detect downloads
+        # This really should go upstream, but I'm not currently sure how error
+        # handling would work in there. Here it's more straightforward.
+        self.previous_navigate_to_page = self.browser.navigate_to_page
+        self.browser.navigate_to_page = self._new_navigate_to_page
+        # is_download can't be relied upon before navigate_to_page has completed,
+        # cf. _message_handler for an explanation
+        self.is_download = False
+        self.first_download_id = None
 
         self.already_fetched = set()
 
@@ -225,6 +235,52 @@ class Brozzler:
                     request_id = params['requestId']
                     error = Error(text = params['errorText'])
                     self.url_log[request_id].chain[-1].response = error
+                elif method == "Browser.downloadWillBegin":
+                    download_id = params['guid']
+                    if self.first_download_id is None:
+                        # We can't accurately use is_download because these events will
+                        # often occur before the browser gives the response to Page.navigate.
+                        # So just always keep track of the first download ID, we'll worry about
+                        # whether it's the main page load later.
+                        self.first_download_id = download_id
+                    self.download_log[download_id] = Download(params['url'], DownloadCompletion.UNFINISHED, 0, None)
+                elif method == "Browser.downloadProgress":
+                    download_id = params['guid']
+                    self.download_log[download_id].received_bytes = params['receivedBytes']
+                    self.download_log[download_id].total_bytes = params['totalBytes']
+                    match params['state']:
+                        case "inProgress":
+                            self.download_log[download_id].status = DownloadCompletion.UNFINISHED
+                        case "completed":
+                            self.download_log[download_id].status = DownloadCompletion.COMPLETED
+                            # Note: This really should use is_download. Otherwise, this could happen:
+                            # 1. Page starts loading
+                            # 2. Page still loading, loads an iframe containing a download
+                            # 3. Page still loading, download completes
+                            # 4. Page erroneously considered finished because the first download completed.
+                            # But I think that's unlikely enough for now. And as mentioned above, is_download can't
+                            # be used here.
+                            if download_id == self.first_download_id:
+                                # Let Brozzler know to continue.
+                                # (Yes, this is jank. Yes, this needs to go upstream. But it works!)
+                                self.browser.websock_thread.got_page_load_event = datetime.datetime.utcnow()
+                        case "canceled":
+                            self.download_log[download_id].status = DownloadCompletion.FAILED
+                            if download_id == self.first_download_id:
+                                self.browser.websock_thread.got_page_load_event = datetime.datetime.utcnow()
+                        case _:
+                            raise AssertionError(f"Unknown download status! {params}")
+
+    def _new_navigate_to_page(self, page_url, timeout = 300):
+        """
+        Replacement for browser.navigate_to_page, adapted from the original brozzler codebase.
+        """
+        self.browser.websock_thread.got_page_load_event = None
+        self.browser.websock_thread.page_status = None
+        resp = self._run_cdp_command("Page.navigate", {"url": page_url})['result']
+        if resp.get("isDownload", False):
+            self.is_download = True
+        self._wait_for(lambda: self.browser.websock_thread.got_page_load_event, timeout, "page load")
 
     # Shamelessly stolen from brozzler's Worker._browse_page.
     # Apparently service workers don't get added to the right WARC:
@@ -335,9 +391,21 @@ class Brozzler:
         )
         self._run_cdp_command("Emulation.setDeviceMetricsOverride", req)
 
+    def _wait_for_all_downloads(self, timeout):
+        if not self.download_log:
+            return
+        logger.info("waiting for all downloads")
+        try:
+            self._wait_for(lambda : all(i.status != DownloadCompletion.UNFINISHED for i in self.download_log.values()), timeout, "downloads")
+        except Timeout:
+            logger.info(f"... downloads timed out after {timeout}, giving up")
+
     def _brozzle(self) -> Result:
         assert self.browser.is_running()
 
+        self._run_cdp_command("Browser.setDownloadBehavior", {
+            "behavior": "allowAndName", "downloadPath": self.browser.chrome._home_tmpdir.name, "eventsEnabled": True
+        })
         version = self._browser_version()
         ua = self._create_user_agent(version)
 
@@ -377,29 +445,34 @@ class Brozzler:
         logger.debug("waiting for idle")
         self.browser._wait_for_idle(idle_time = 3, timeout = 10)
 
-        logger.debug("taking screenshot")
-        self.browser._try_screenshot(self._on_screenshot, full_page = True)
-        self._set_metrics_override()
-        logger.debug("took screenshot!")
-
-        outer_html = self._capture_dom()
-        logger.debug("writing outer HTML to WARC")
-        self._write_warcprox_record("rendered-dom:" + self.canon_url, "text/html", outer_html.encode(), self.job.warc_prefix)
-
         custom_js_result = None
         custom_js_screenshot = None
-        if self.job.custom_js:
-            custom_js_result = self._run_custom_js()
-            logger.debug("waiting for idle after custom JS")
-            self.browser._wait_for_idle(idle_time = 3, timeout = 5)
-            self.browser._try_screenshot(self._on_cjs_screenshot, full_page = True)
-            if self.custom_js_screenshot:
-                custom_js_screenshot = base64.b85encode(self.custom_js_screenshot).decode()
+        outer_html = None
+        if not self.is_download:
+            logger.debug("taking screenshot")
+            self.browser._try_screenshot(self._on_screenshot, full_page = True)
+            self._set_metrics_override()
+            logger.debug("took screenshot!")
 
-        logger.debug("extracting outlinks")
-        outlinks = [outlink for outlink in self.browser.extract_outlinks() if outlink.startswith("http")]
-        logger.debug("visiting anchors")
-        self.browser.visit_hashtags(final_url, [], outlinks)
+            outer_html = self._capture_dom()
+            logger.debug("writing outer HTML to WARC")
+            self._write_warcprox_record("rendered-dom:" + self.canon_url, "text/html", outer_html.encode(), self.job.warc_prefix)
+
+            if self.job.custom_js:
+                custom_js_result = self._run_custom_js()
+                logger.debug("waiting for idle after custom JS")
+                self.browser._wait_for_idle(idle_time = 3, timeout = 5)
+                self.browser._try_screenshot(self._on_cjs_screenshot, full_page = True)
+                if self.custom_js_screenshot:
+                    custom_js_screenshot = base64.b85encode(self.custom_js_screenshot).decode()
+
+            logger.debug("extracting outlinks")
+            outlinks = [outlink for outlink in self.browser.extract_outlinks() if outlink.startswith("http")]
+            logger.debug("visiting anchors")
+            self.browser.visit_hashtags(final_url, [], outlinks)
+        # Downloads timing out isn't the end of the world. warcprox continues the download even if the browser
+        # hangs up. But it does mean we can't track it any more.
+        self._wait_for_all_downloads(timeout = 150)
 
         with self.websock_thread_lock:
             r = Result(
@@ -411,6 +484,8 @@ class Brozzler:
                 requisites = self.url_log,
                 custom_js_screenshot = custom_js_screenshot,
                 rendered_dom = outer_html,
+                download_log = self.download_log,
+                first_download_id = self.first_download_id,
             )
             logger.debug("writing job result data")
             self._write_warcprox_record(
@@ -446,7 +521,11 @@ def main():
             write_message("outlinks", result.outlinks)
             write_message("requisites", [dataclasses.asdict(v) for v in result.requisites.values()])
             write_message("status_code", result.status_code)
-            write_message("rendered_dom", result.rendered_dom)
+            if result.rendered_dom is not None:
+                write_message("rendered_dom", result.rendered_dom)
+            # Only submit download log if it contains downloads
+            if result.download_log:
+                write_message("download_log", [dataclasses.asdict(v) for v in result.download_log.values()])
 
             if browser.screenshot:
                 screenshot = base64.b85encode(browser.screenshot).decode()
@@ -458,9 +537,12 @@ def main():
                 write_message("custom_js", result.custom_js)
                 if jsr['status'] != "success":
                     raise MnError("Custom JS didn't succeed")
+            if result.first_download_id is not None and result.download_log[result.first_download_id].status != DownloadCompletion.COMPLETED:
+                # TODO: If custom JS triggers a download, that should also be an error, no?
+                raise MnError("Download of non-inline page didn't succeed")
             if result.status_code >= 400:
                 raise BadStatusCode(result.status_code)
-            elif not result.final_url.startswith("http"):
+            if result.first_download_id is None and not result.final_url.startswith("http"):
                 raise MnError(f"Bad final_url {result.final_url}")
         except BadStatusCode as e:
             if e.fatal:

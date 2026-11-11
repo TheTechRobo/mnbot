@@ -109,8 +109,8 @@
 						</details>
 					</li>
 				{% endif %}
-				<li class="res-outlinks">
-					{% if attempt.results.outlinks %}
+				{% if attempt.results.outlinks %}
+					<li class="res-outlinks">
 						<details>
 							<summary>
 								<b>Discovered outlinks</b> (before filtering):
@@ -125,10 +125,8 @@
 								{% endfor %}
 							</ul>
 						</details>
-					{% else %}
-						<em>No outlinks were recorded.</em>
-					{% endif %}
-				</li>
+					</li>
+				{% endif %}
 				<li class="res-requisites">
 					{% if not attempt.results.requisites is none %}
 						<details>
@@ -185,6 +183,24 @@
 						</details>
 					{% else %}
 						<em>A requisite list was not submitted.</em>
+					{% endif %}
+					{% if attempt.results.download_log %}
+						<li>
+							<b>Downloads:</b>
+							<table>
+								<tr>
+									<th>URL</th>
+									<th>Transferred / Total</th>
+									<th>Status</th>
+								</tr>
+								{% for download in attempt.results.download_log %}
+									<tr>
+										<td>{{ download.url }}</td>
+										<td>{{ download.received_bytes }} / {{ download.total_bytes }}</td>
+										<td>{{ download.status }}</td>
+									</tr>
+								{% endfor %}
+							</table>
 					{% endif %}
 				</li>
 			</ul>
