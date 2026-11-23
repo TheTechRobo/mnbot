@@ -396,9 +396,9 @@ async def test_ruleset(job_id, ruleset_id, html):
         conn = await conn.execution_options(postgresql_readonly = True)
         queue = db.Connection(conn)
         latest_ruleset = await queue.get_job_ruleset(job_id)
-        warning = "<p><b>Warning: You are not querying the latest ruleset.</b></p>" if str(latest_ruleset.job_ruleset_id) != ruleset_id else ""
+        warning = "<p><b>Warning: You are not querying the latest ruleset. Consider refreshing the page.</b></p>" if str(latest_ruleset.job_ruleset_id) != ruleset_id else ""
         if url != normalized:
-            warning += "<p>Warning: When extracting outlinks, this URL will be normalized to <code>{{ normalized|e }}</code>.</p>"
+            warning += "<p>Warning: If this URL is encounted when extracting outlinks, it will be normalized to <code>{{ normalized|e }}</code>, which may have different rules.</p>"
         ruleset = await queue.get_ruleset(ruleset_id)
         settings = db.PageSettings.from_ruleset(url, ruleset)
     if html:
