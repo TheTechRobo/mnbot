@@ -277,7 +277,7 @@ class Brozzler:
         """
         self.browser.websock_thread.got_page_load_event = None
         self.browser.websock_thread.page_status = None
-        resp = self._run_cdp_command("Page.navigate", {"url": page_url})['result']
+        resp = self._run_cdp_command("Page.navigate", {"url": page_url}, timeout = 300)['result']
         if resp.get("isDownload", False):
             self.is_download = True
         self._wait_for(lambda: self.browser.websock_thread.got_page_load_event, timeout, "page load")
