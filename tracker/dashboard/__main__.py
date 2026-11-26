@@ -57,6 +57,7 @@ class JobInfoPacket:
     note: str | None
     initial_page: str
     ruleset: db.JobRuleset
+    delay: int | None
 
 @dataclasses.dataclass
 class ResultsInfoPacket:
@@ -285,6 +286,7 @@ async def single_job(job_id, html):
             initial_page = row.initial_page,
             ruleset = ruleset,
             active_claims = row.all_claims or [],
+            delay = row.delay,
         )
     if html:
         timestamp = datetime.datetime.fromtimestamp(db.parse_id_ex(packet.id).timestamp / 1000, datetime.timezone.utc)

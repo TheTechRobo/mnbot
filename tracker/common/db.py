@@ -137,6 +137,7 @@ class JobCreation:
     tag: str | None = None
     note: str | None = None
     depth: int | None = None
+    delay: int | None = None
 
 @dataclasses.dataclass
 class PageCreation:
@@ -211,6 +212,7 @@ def _find_claimable_job_q(pipeline: str | None, matchonly: bool, include_existin
         .where( model.jobs.c.status == model.JobStatus.ACTIVE)
         .where(concurrency_where)
         .where(tag_where_clause)
+        .where( (model.jobs.c.not_claimable_before < datetime.datetime.now(datetime.UTC)) | (model.jobs.c.not_claimable_before == None) )
         .order_by(*model.jobs_dequeue_order)
         #.with_for_update(key_share = True)
     )
@@ -274,6 +276,7 @@ class Connection:
                 initial_page = job.initial_page,
                 metadata = job.metadata,
                 depth = job.depth,
+                delay = job.delay,
             ))
             rulesets.append(job.initial_ruleset.for_db() | {"job_id": job.job_id, "job_ruleset_id": generate_id()})
         await self.conn.execute(sqlalchemy.insert(model.jobs), values)
@@ -804,10 +807,14 @@ class Pipeline:
             return res[0]
         return None
 
+    @staticmethod
+    def _make_interval(years = 0, months = 0, weeks = 0, days = 0, hours = 0, minutes = 0, seconds = 0):
+        return sqlalchemy.func.make_interval(years, months, weeks, days, hours, minutes, seconds)
+
     @_wrap_serialization_failure
     async def _set_claim(self, slot: int, job: model.UUID | None):
         """
-        Sets the current claim for a job, and updates the claim count of the old and new jobs.
+        Sets the current claim for a job, and updates the claim count and not_claimable_before of the old and new jobs.
         """
         # Update claim entry
         q = (
@@ -822,7 +829,7 @@ class Pipeline:
             raise NoSuchPipelineError()
         old_job = res[0]
 
-        # Update active_claims values
+        # Update active_claims and not_claimable_before values
         if old_job:
             q = (
                 sqlalchemy.update(model.jobs)
@@ -834,9 +841,31 @@ class Pipeline:
             q = (
                 sqlalchemy.update(model.jobs)
                 .where(model.jobs.c.job_id == job)
-                .values(active_claims = model.jobs.c.active_claims + 1)
+                .values(
+                    active_claims = model.jobs.c.active_claims + 1,
+                    # This math results in NULL if there is no delay, which is what we expect
+                    # (if this is NULL, there is considered to be no minimum timestamp)
+                    not_claimable_before = datetime.datetime.now(datetime.UTC) + self._make_interval(seconds = model.jobs.c.delay)
+                )
             )
             await self.conn.execute(q)
+
+    @_wrap_serialization_failure
+    async def _refresh_job_delay(self, job_id: model.UUID):
+        """
+        Refreshes jobs.not_claimable_before for a specific job.
+        """
+        q = (
+            sqlalchemy.update(model.jobs)
+            .where(model.jobs.c.job_id == job_id)
+            .values(
+                not_claimable_before = datetime.datetime.now(datetime.UTC) + self._make_interval(seconds = model.jobs.c.delay)
+            )
+        )
+        res = await self.conn.execute(q)
+        if res.rowcount == 0:
+            raise NoSuchThingError()
+        assert res.rowcount == 1
 
     @_wrap_serialization_failure
     async def _create_attempt(self, page: model.UUID, pipeline_version: str, pipeline_slot: int, ruleset_id: model.UUID) -> model.UUID:
@@ -928,10 +957,14 @@ class Pipeline:
         assert pipeline_info is not None, "Pipeline disappeared"
         current_claim = pipeline_info.current_claim
         new_job = await self._find_claimable_job(pipeline_info.matchonly, current_claim)
-        if new_job != pipeline_info.current_claim:
-            # Either we found a better option, or the job is no longer valid
+        if new_job == pipeline_info.current_claim:
+            # If the job is the same, only refresh the job's not_claimable_before field (two less queries)
+            if new_job is not None:
+                await self._refresh_job_delay(new_job)
+        else:
+            # Otherwise, update the claim like normal
             await self._set_claim(slot, new_job)
-            current_claim = new_job
+        current_claim = new_job
         if current_claim:
             return await self._claim_page(current_claim, pipeline_version, slot)
 

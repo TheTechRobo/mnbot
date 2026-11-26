@@ -91,6 +91,7 @@ def validate_depth(depth):
     except (ValueError, AssertionError):
         raise CustomMessageException("Invalid depth value! Please supply either an integer >= 0 or 'inf' for no limit.")
 
+@bot.add_argument("--delay", type = int, default = None)
 @bot.add_argument("--for", "--cc", dest = "cc", action = "append")
 @bot.add_argument("--tag", default = None)
 @bot.add_argument("--accept", default = None)
@@ -159,6 +160,7 @@ async def brozzle(self: Bot, user: User, ran, args):
         initial_ruleset = initial_ruleset,
         depth = depth,
         tag = args.tag,
+        delay = args.delay,
     )
 
     async with ENGINE.connect() as conn:
@@ -331,6 +333,45 @@ async def concurrency(self: Bot, user: User, ran, job_id, num):
         res = await conn.execute(q)
         assert res.rowcount == 1
     yield f"Updated concurrency of {job_id} to {num}."
+
+@bot.command({"!delay", "!d"}, required_modes = "+@")
+async def delay(self: Bot, user: User, ran, job_id, new_delay = None):
+    job_id = db.parse_id(job_id)
+    if new_delay:
+        try:
+            new_delay = int(new_delay)
+            assert new_delay >= 0
+            if new_delay == 0:
+                new_delay = None
+        except (ValueError, AssertionError):
+            yield "Sorry, but delay must be a positive integer."
+            return
+        async with ENGINE.begin() as conn:
+            q = sqlalchemy.update(model.jobs).where(model.jobs.c.job_id == job_id).values(delay = new_delay, not_claimable_before = None)
+            res = await conn.execute(q)
+        if res.rowcount == 0:
+            raise CustomMessageException("No job with that ID was found.")
+        assert res.rowcount == 1
+        if new_delay is None:
+            yield f"Successfully removed the delay from {job_id}."
+        else:
+            yield f"Successfully changed the delay for job {job_id} to {new_delay} seconds."
+    else:
+        async with ENGINE.connect() as conn:
+            conn = await conn.execution_options(postgresql_readonly = True)
+            q = sqlalchemy.select(model.jobs.c.delay, model.jobs.c.not_claimable_before).where(model.jobs.c.job_id == job_id)
+            res = await conn.execute(q)
+            if row := res.one_or_none():
+                if row.delay:
+                    message = f"Job {job_id} has a delay of {row.delay} seconds"
+                    if row.not_claimable_before:
+                        message += f" and won't be claimed before {row.not_claimable_before.replace(microsecond = 0)}"
+                    message += "."
+                else:
+                    message = f"Job {job_id} has no delay."
+                yield message
+            else:
+                yield "No job with that ID was found."
 
 async def generate_status_message(job: str, queue: db.Connection):
     q = sqlalchemy.select(model.jobs.c.status, model.jobs.c.initial_page, model.jobs.c.note).where(model.jobs.c.job_id == job)

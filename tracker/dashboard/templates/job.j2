@@ -20,6 +20,9 @@
 		<li><b>Created at: </b>{{ timestamp }}</li>
 		<li><b>Max depth: </b>{% if job.depth is none %} Unlimited {% else %} {{ job.depth }} {% endif %}</li>
 		<li><b>Max concurrency: </b>{{ job.concurrency }} ({{ job.active_claims|length }} active claims)</li>
+		{% if job.delay %}
+			<li><b>Delay: </b>No more than one claim every {{ job.delay }} seconds</li>
+		{% endif %}
 		{% if job.note %}
 			<li><b>Explanation: </b>{{ job.note }}</li>
 		{% endif %}

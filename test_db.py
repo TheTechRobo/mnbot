@@ -108,11 +108,11 @@ async def test_get_job_counts(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         await make_job()
         assert (await q.get_job_counts()) == 3
 
-async def make_job(q, status = model.JobStatus.ACTIVE, concurrency = 0, nice = 0, tag = None, depth = None, initial_ruleset = None):
+async def make_job(q, status = model.JobStatus.ACTIVE, concurrency = 0, nice = 0, tag = None, depth = None, initial_ruleset = None, delay = None):
     if initial_ruleset is None:
         initial_ruleset = default_ruleset()
     id = db.generate_id()
-    await q.create_jobs([db.JobCreation(id, "foo", {}, "", initial_ruleset, status, concurrency, nice, tag, None, depth)])
+    await q.create_jobs([db.JobCreation(id, "foo", {}, "", initial_ruleset, status, concurrency, nice, tag, None, depth, delay)])
     return id
 
 async def make_pages(q, job_id, *payloads, parent_page = None, use_payload_as_id = False):
@@ -1149,6 +1149,88 @@ async def test_skip_always_updates(engine: sqlalchemy.ext.asyncio.AsyncEngine):
         assert [page.payload async for page in q.all_pending_pages(job1)] == ["baz"]
         assert (await pipe.find_claim_page("", 0)).payload == "baz"
         assert [page.payload async for page in q.all_pending_pages(job1)] == []
+
+async def _cfp(pipe: db.Pipeline):
+    """
+    Helper to claim a page. If a page is found, marks it as finished and returns its job id. Else returns None.
+    """
+    r = await pipe.find_claim_page("", 0)
+    if r:
+        await pipe.finish_attempt(r.attempt_id)
+        return r.job_id
+    return None
+
+@_test
+async def test_delay_1d1n(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests that delay works with one delayed job, and one undelayed job.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        delayed_job = await make_job(q, concurrency = 1, nice = -1, delay = 1)
+        regular_job = await make_job(q, concurrency = 1, nice = 1)
+        await make_pages(q, delayed_job, *(str(i) for i in range(3)))
+        await make_pages(q, regular_job, *(str(i) for i in range(3)))
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+
+        assert await _cfp(pipe) == delayed_job
+        assert await _cfp(pipe) == regular_job
+        assert await _cfp(pipe) == regular_job
+        await asyncio.sleep(1)
+        assert await _cfp(pipe) == delayed_job
+        assert await _cfp(pipe) == regular_job
+        assert await _cfp(pipe) is None
+        assert await _cfp(pipe) is None
+        await asyncio.sleep(1)
+        assert await _cfp(pipe) == delayed_job
+        assert await _cfp(pipe) is None
+        await asyncio.sleep(1)
+        assert await _cfp(pipe) is None
+
+@_test
+async def test_delay_2d(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests that delay works with two delayed jobs (of differing values).
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        prioritised_job = await make_job(q, concurrency = 1, nice = -1, delay = 6)
+        other_job = await make_job(q, concurrency = 1, nice = 1, delay = 3)
+        await make_pages(q, prioritised_job, *(str(i) for i in range(10)))
+        await make_pages(q, other_job, *(str(i) for i in range(10)))
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+
+        assert await _cfp(pipe) == prioritised_job
+        assert await _cfp(pipe) == other_job
+        assert await _cfp(pipe) is None
+        await asyncio.sleep(1)
+        assert await _cfp(pipe) is None
+        await asyncio.sleep(2)
+        assert await _cfp(pipe) == other_job
+        assert await _cfp(pipe) is None
+        await asyncio.sleep(6)
+        assert await _cfp(pipe) == prioritised_job
+        assert await _cfp(pipe) == other_job
+        assert await _cfp(pipe) is None
+
+@_test
+async def test_delay_zero(engine: sqlalchemy.ext.asyncio.AsyncEngine):
+    """
+    Tests that a zero delay works as expected.
+    """
+    async with engine.connect() as conn:
+        q = db.Connection(conn)
+        job = await make_job(q, concurrency = 1, nice = -1, delay = 0)
+        await make_pages(q, job, *(str(i) for i in range(2)))
+        await q.create_pipeline("pipe", False, "password")
+        pipe = await q.pipeline("pipe", 0)
+
+        assert await _cfp(pipe) == job
+        assert await _cfp(pipe) == job
+        assert await _cfp(pipe) is None
+        await asyncio.sleep(1)
 
 @db._wrap_serialization_failure
 async def _commit(conn):

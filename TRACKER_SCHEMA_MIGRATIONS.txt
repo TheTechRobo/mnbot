@@ -7,3 +7,8 @@ Schema version 1 -> 2:
 Schema version 2 -> 3:
 	ALTER TYPE public.resulttype ADD VALUE 'DOWNLOAD_LOG' AFTER 'RENDERED_DOM';
 	UPDATE options SET value = '3' WHERE key = 'version';
+
+Schema version 3 -> 4 (adds support for delays):
+	ALTER TABLE jobs ADD COLUMN delay integer;
+	ALTER TABLE jobs ADD COLUMN not_claimable_before timestamp with time zone;
+	UPDATE options SET value = '4' WHERE key = 'version';

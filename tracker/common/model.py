@@ -5,7 +5,7 @@ import enum
 
 from uuid import UUID
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 class JobStatus(enum.Enum):
     ACTIVE = 0
@@ -82,6 +82,8 @@ jobs = Table(
     Column("note", sqlalchemy.Text, nullable = True),
     Column("initial_page", sqlalchemy.Text),
     Column("metadata", sqlalchemy.dialects.postgresql.JSONB),
+    Column("delay", sqlalchemy.Integer, nullable = True, default = None),
+    Column("not_claimable_before", sqlalchemy.TIMESTAMP(timezone = True), nullable = True, default = None),
 )
 jobs_dequeue_order = (jobs.c.nice, jobs.c.job_id)
 jobs_dequeue_index = Index(
